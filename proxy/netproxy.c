@@ -20,6 +20,8 @@
  *        meanwhile (last heard, pings answered, whether that player is itself waiting and for whom).
  *   v15: ghost room clean-up (ghostroom.c): when the game's Create gives up and goes back to the Game Browser without
  *        leaving the lobby it created, that lobby is left the way the game's own Leave would. [lobby] GhostRoom=1.
+ *   v16: the quit-crash fix runs in memory on the game's own dssl.dll (soundfix.c) instead of a stand-in dssl.dll that
+ *        Smart App Control kept refusing; old installs get their original dssl.dll back. Logs Smart App Control's state.
  *
  * How RoN drops a player (reverse/netcode-map.md, "How a player actually gets dropped"): every
  * client must report having lost them; when all have, the game drops them at the same turn on all
@@ -569,10 +571,12 @@ static int THISCALL w_waiting(void *self, int player, int ms)
 
 /* slot 15 check_pulse, every tick: notices that a wait has ended */
 static void telemetry_tick(void *self);
+static void snd_tick(void); /* quit-crash fix in memory (soundfix.c) */
 static void lobby_tick(void *self);
 static void steam_tick(void *self);
 static int THISCALL w_check_pulse(void *self)
 {
+	snd_tick();
 	telemetry_tick(self);
 	if (lobby_log || lf_enabled || td_capable) /* the lobby fixes and the delay negotiation reuse these scans */
 		lobby_tick(self);
@@ -1274,6 +1278,7 @@ static pf_leave_fn pf_leave_orig;
 
 #include "lobbyfix.c" /* host-only lobby fixes: real kick on boot, ban list, ready spam */
 #include "ghostroom.c" /* leave the lobby a failed Create left behind */
+#include "soundfix.c" /* quit-crash fix on the game's own dssl.dll, in memory */
 
 static long __stdcall w_pf_start(void *h, unsigned *count, const void *const **changes)
 {
@@ -1552,9 +1557,11 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 			for (DWORD k = 0; k < got && vb[k] >= '0' && vb[k] <= '9'; k++)
 				sl_release_no = sl_release_no * 10 + (unsigned)(vb[k] - '0');
 		}
-		logline("==== RoN-Fix core v15, pid %lu; exe build %s; fix A %s (report after %d s without turn data); fix B (desync-vote crash) %s",
+		logline("==== RoN-Fix core v16, pid %lu; exe build %s; fix A %s (report after %d s without turn data); fix B (desync-vote crash) %s",
 		        GetCurrentProcessId(), exe_ok ? "ok" : "UNKNOWN", exe_ok && report_ms > 0 ? "ON" : "OFF",
 		        report_ms / 1000, exe_ok ? "ON" : "OFF");
+		sac_log();
+		snd_migrate(); /* before the game loads dssl.dll */
 		if (warmed)
 			logline("startup: crypto warmed at load (BCryptGenRandom status 0x%08lx)", (unsigned long)warm_status);
 		else

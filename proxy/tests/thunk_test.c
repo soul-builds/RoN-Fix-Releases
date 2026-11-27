@@ -184,6 +184,7 @@ static void test_g3(void)
 #include "steam_tests.c"
 #include "lobbyfix_tests.c"
 #include "ghostroom_tests.c"
+#include "soundfix_tests.c"
 #include "turndelay_tests.c"
 
 __declspec(dllexport) int __stdcall run_thunk_tests(char *buf, int len)
@@ -195,6 +196,7 @@ __declspec(dllexport) int __stdcall run_thunk_tests(char *buf, int len)
 	test_steam();
 	test_lobbyfix();
 	test_ghostroom();
+	test_soundfix();
 	test_turndelay();
 	char b[80]; wsprintfA(b, "%d passed, %d failed\r\n", passes, fails); say(b);
 	return fails;

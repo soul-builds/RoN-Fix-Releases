@@ -17,7 +17,8 @@
 #include <winhttp.h>
 #include "update_keys.h"
 
-#define UPDATER_VERSION 1
+#define UPDATER_VERSION 2 /* v2 (RoN-Fix 0.15): a release Windows refused is tried again only after a week */
+#define REFUSED_RETRY_DAYS 7
 #define FEED_DEFAULT L"https://github.com/soul-builds/RoN-Fix/releases/latest/download/"
 #define AGENT L"RoN-Fix-updater/1"
 /* RoN-Fix's log server (logserver/, Cloudflare account of soul_builds, deployed 2026-11-27). Only used with
@@ -435,8 +436,18 @@ static int pe_build(const WCHAR *path, DWORD *stamp, DWORD *size)
 /* Would Windows load this DLL? Maps it as an image without running any of it (no DllMain): Smart App Control
  * and code integrity decide at that moment (error 4551 / 577). An update Windows would refuse is NOT installed,
  * because a refused loader would stop the game from starting at all. 0 = refused. */
+#ifdef RONFIX_TEST
+static int test_refuse_image, test_image_checks, test_day;
+#endif
 static int image_allowed(const WCHAR *p, DWORD *err)
 {
+#ifdef RONFIX_TEST
+	test_image_checks++;
+	if (test_refuse_image) {
+		*err = ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION;
+		return 0;
+	}
+#endif
 	/* no "Bad Image" message box over the game when Windows refuses it (see loader.c quiet_load) */
 	DWORD old = 0;
 	BOOL set = SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &old);
@@ -468,6 +479,21 @@ static int move_retry(const WCHAR *from, const WCHAR *to)
 	return 0;
 }
 
+/* days since 1 March of year 0 (only differences are used): 32-bit integer arithmetic, no CRT */
+static int day_number(void)
+{
+#ifdef RONFIX_TEST
+	if (test_day)
+		return test_day;
+#endif
+	SYSTEMTIME t;
+	GetSystemTime(&t);
+	int y = t.wYear - (t.wMonth <= 2), m = t.wMonth, d = t.wDay;
+	int era = y / 400, yoe = y - era * 400;
+	int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+	return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
+}
+
 /* ------------------------------------------------------------------ the update */
 #ifdef RONFIX_TEST
 static int test_update_result;
@@ -479,7 +505,7 @@ static int update_check(void)
 	static char mbuf[MAX_MANIFEST + 1], nb[600];
 	static unsigned char sig[96];
 	static WCHAR feed[400], url[512], p[MAX_PATH], q[MAX_PATH], wa[NAME_MAX_ + 4], wt[NAME_MAX_ + 4];
-	static WCHAR target[MAX_PATH], prev[MAX_PATH], pend[MAX_PATH];
+	static WCHAR target[MAX_PATH], prev[MAX_PATH], pend[MAX_PATH], state[MAX_PATH], num[16];
 	DWORD status;
 	int installed = installed_version();
 
@@ -513,6 +539,16 @@ static int update_check(void)
 	if (man.version <= installed) {
 		ulogf("up to date: installed release %d, feed has release %d (%s)", installed, man.version, man.name);
 		return 0;
+	}
+	/* A release Windows refused on this PC (Smart App Control) is tried again only after REFUSED_RETRY_DAYS: each try
+	 * test-loads its DLLs, and a refusal can show a Windows notice. A newer release is tried at once. */
+	wjoin(state, MAX_PATH, gdir, L"ronfix\\update-state.ini", 0);
+	int refused = (int)GetPrivateProfileIntW(L"refused", L"Release", 0, state);
+	int since = day_number() - (int)GetPrivateProfileIntW(L"refused", L"Day", 0, state);
+	if (refused == man.version && since >= 0 && since < REFUSED_RETRY_DAYS) {
+		ulogf("RoN-Fix %s (release %d) was refused by Windows on this PC %d day(s) ago: next try in %d day(s)", man.name,
+		      man.version, since, REFUSED_RETRY_DAYS - since);
+		return 6;
 	}
 	if (man.ngame) {
 		DWORD st = 0, sz = 0;
@@ -592,7 +628,11 @@ static int update_check(void)
 		    lower_w((WCHAR)f->target[tl - 1]) == 'l' && !image_allowed(p, &ce)) {
 			DeleteFileW(p);
 			ulogf("update NOT installed: Windows would refuse to load the new %s (error %lu, Smart App Control or code "
-			      "integrity); keeping RoN-Fix %d as it is", f->target, ce, installed);
+			      "integrity); keeping RoN-Fix %d as it is, next try in %d days", f->target, ce, installed, REFUSED_RETRY_DAYS);
+			wsprintfW(num, L"%d", man.version);
+			WritePrivateProfileStringW(L"refused", L"Release", num, state);
+			wsprintfW(num, L"%d", day_number());
+			WritePrivateProfileStringW(L"refused", L"Day", num, state);
 			return 6;
 		}
 	}

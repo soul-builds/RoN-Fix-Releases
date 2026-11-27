@@ -56,5 +56,8 @@ __declspec(dllexport) int __stdcall setup_test_bans_unban(const WCHAR *dir, int 
 	return bans_unban(dir, ids, n);
 }
 
+/* 1: the next installs behave as if Windows (Smart App Control) refused the loader */
+__declspec(dllexport) void __stdcall setup_test_refuse_loader(int on) { test_refuse_loader = on; }
+
 /* used by the window code only, which this test build leaves out */
-__attribute__((used)) static void *const window_only[] = { (void *)find_game, (void *)installed_release, (void *)consent_known, (void *)consent_now };
+__attribute__((used)) static void *const window_only[] = { (void *)find_game, (void *)installed_release, (void *)consent_known, (void *)consent_now, (void *)sac_state, (void *)sac_text };

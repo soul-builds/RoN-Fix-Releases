@@ -46,7 +46,7 @@
 #define SND_STAMP 0x667485aeu
 #define SND_SIZE 0x121000u
 
-enum { R_LOADER = 101, R_CORE, R_UPDATE, R_SOUND, R_INI };
+enum { R_LOADER = 101, R_CORE, R_UPDATE, R_INI = 105 }; /* 104 was the dssl.dll stand-in, until 0.14 */
 
 static WCHAR msg[2048]; /* result of the last action, shown to the player */
 static int no_shortcut;  /* --no-shortcut (tests): no Start menu entry */
@@ -443,13 +443,81 @@ static int consent_now(const WCHAR *dir)
 #include "graphics.c"
 #include "bans.c" /* the ban list: what the "Banned players" window shows and edits */
 
+/* Windows' Smart App Control: 0 off, 1 on, 2 evaluation (watches only), -1 not reported (older Windows) */
+static int sac_state(void)
+{
+	DWORD v = 0, n = sizeof v;
+	if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"VerifiedAndReputablePolicyState",
+	                 RRF_RT_REG_DWORD, NULL, &v, &n) != ERROR_SUCCESS)
+		return -1;
+	return (int)v;
+}
+
+static const WCHAR sac_text[] = L"Smart App Control is a Windows protection that blocks programs Microsoft does not know yet. It has no "
+	L"exceptions for single programs. RoN-Fix is not code-signed yet, so Windows may refuse a new RoN-Fix version on "
+	L"this PC. When it does, RoN-Fix steps aside: the game runs as normal without the fixes, and RoN-Fix tries that "
+	L"version again a week later.\n\n"
+	L"You can:\n"
+	L"\x2022  Wait. RoN-Fix has applied for free code signing, and Windows allows signed programs.\n"
+	L"\x2022  Switch Smart App Control off yourself: Windows Security > App & browser control > Smart App Control "
+	L"settings. That turns the protection off for every program, not only RoN-Fix (Microsoft Defender keeps running). "
+	L"With Windows 11's April 2026 update or later you can switch it back on there; on older versions only by "
+	L"reinstalling Windows.\n\n"
+	L"RoN-Fix never changes this setting itself.";
+
+#ifdef SETUP_TEST
+static int test_refuse_loader;
+#endif
+/* Would Windows load this DLL? Mapped as an image without running any of it, as the updater does (update.c). */
+static int image_refused(const WCHAR *p)
+{
+#ifdef SETUP_TEST
+	if (test_refuse_loader)
+		return 1;
+#endif
+	DWORD old = 0;
+	BOOL set = SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &old);
+	HMODULE m = LoadLibraryExW(p, NULL, DONT_RESOLVE_DLL_REFERENCES);
+	DWORD e = GetLastError();
+	if (set)
+		SetThreadErrorMode(old, NULL);
+	if (m) {
+		FreeLibrary(m);
+		return 0;
+	}
+	return e == 4551 /* ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION */ || e == ERROR_INVALID_IMAGE_HASH;
+}
+
+/* Until 0.14 the quit-crash fix was a stand-in dssl.dll with the game's own kept as dssl_orig.dll. Since 0.15 the
+ * core fixes the game's own dssl.dll in memory: put the original back, the stand-in goes to ronfix\\previous. */
+static int sound_restore(const WCHAR *dir)
+{
+	WCHAR p[MAX_PATH], o[MAX_PATH], keep[MAX_PATH];
+	path(p, dir, L"dssl.dll");
+	path(o, dir, L"dssl_orig.dll");
+	if (!is_build(o, SND_STAMP, SND_SIZE))
+		return 0; /* no original kept aside (or an unknown file): nothing to do */
+	if (is_build(p, SND_STAMP, SND_SIZE)) {
+		DeleteFileW(o); /* the original is in place already */
+		return 0;
+	}
+	path(keep, dir, L"ronfix\\previous");
+	CreateDirectoryW(keep, NULL);
+	path(keep, dir, L"ronfix\\previous\\dssl-standin.dll");
+	if (exists(p) && !MoveFileExW(p, keep, MOVEFILE_REPLACE_EXISTING))
+		return 0;
+	if (!MoveFileExW(o, p, MOVEFILE_REPLACE_EXISTING)) {
+		MoveFileExW(keep, p, MOVEFILE_REPLACE_EXISTING);
+		return 0;
+	}
+	return 1;
+}
+
 /* logs: 1 send, 0 don't, -1 leave as it is */
 static int do_install(const WCHAR *dir, int updates, int logs)
 {
 	WCHAR p[MAX_PATH], o[MAX_PATH], copy_to[MAX_PATH];
-	static const WCHAR *const names[2] = { L"CrossplayNetLib", L"dssl" };
-	static const DWORD stamps[2] = { NET_STAMP, SND_STAMP }, sizes[2] = { NET_SIZE, SND_SIZE };
-	int move_orig[2];
+	int move_orig;
 
 	if (game_running()) {
 		say(L"Rise of Nations is running. Close the game, then press Install again.");
@@ -466,48 +534,59 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 	default:
 		break;
 	}
-	/* 1. check both originals before touching anything */
-	for (int k = 0; k < 2; k++) {
-		WCHAR n1[64], n2[64];
-		_snwprintf(n1, 64, L"%ls.dll", names[k]);
-		_snwprintf(n2, 64, L"%ls_orig.dll", names[k]);
-		path(p, dir, n1);
-		path(o, dir, n2);
-		if (is_build(p, stamps[k], sizes[k]))
-			move_orig[k] = 1; /* the game's own file: becomes _orig (also after Steam restored it) */
-		else if (is_build(o, stamps[k], sizes[k]))
-			move_orig[k] = 0; /* RoN-Fix is in already, original kept */
-		else {
-			say(L"%ls is not the version RoN-Fix was made for, so nothing was changed. In Steam: right-click Rise of "
-			    L"Nations > Properties > Installed Files > Verify integrity of game files, then try again.", n1);
-			return 1;
-		}
+	/* 1. the game's own CrossplayNetLib.dll must be there (as itself, or kept aside by RoN-Fix) before anything changes */
+	path(p, dir, L"CrossplayNetLib.dll");
+	path(o, dir, L"CrossplayNetLib_orig.dll");
+	if (is_build(p, NET_STAMP, NET_SIZE))
+		move_orig = 1; /* the game's own file: becomes _orig (also after Steam restored it) */
+	else if (is_build(o, NET_STAMP, NET_SIZE))
+		move_orig = 0; /* RoN-Fix is in already, original kept */
+	else {
+		say(L"CrossplayNetLib.dll is not the version RoN-Fix was made for, so nothing was changed. In Steam: right-click "
+		    L"Rise of Nations > Properties > Installed Files > Verify integrity of game files, then try again.");
+		return 1;
 	}
 	path(p, dir, L"ronfix");
 	if (!CreateDirectoryW(p, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
 		return fail_io(L"create the ronfix folder");
-	/* 2. RoN-Fix's own new files first (harmless alone), then each stand-in: original aside, stand-in in, and
-	 *    the original straight back if that fails, so the game is never left without a file it needs.
-	 *    The loader goes last: it is the file that switches RoN-Fix on. */
-	if (!put_res(dir, L"ronfix-core.dll", R_CORE) || !put_res(dir, L"ronfix-update.dll", R_UPDATE))
-		return fail_io(L"copy RoN-Fix's files into the game folder");
-	static const int ids[2] = { R_LOADER, R_SOUND };
-	for (int k = 1; k >= 0; k--) {
-		WCHAR n1[64], n2[64];
-		_snwprintf(n1, 64, L"%ls.dll", names[k]);
-		_snwprintf(n2, 64, L"%ls_orig.dll", names[k]);
-		path(p, dir, n1);
-		path(o, dir, n2);
-		if (move_orig[k] && !MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING))
-			return fail_io(L"keep the original game file aside");
-		if (!put_res(dir, n1, ids[k])) {
-			DWORD e = GetLastError();
-			if (move_orig[k])
-				MoveFileExW(o, p, MOVEFILE_REPLACE_EXISTING);
-			SetLastError(e);
-			return fail_io(L"copy RoN-Fix's files into the game folder");
+	/* 1b. the loader is the one file the game cannot start without. Before it goes in, Windows is asked whether it
+	 *     would load it (Smart App Control): written to ronfix\loader-check.dll and test-loaded, no code runs. */
+	{
+		DWORD n;
+		const void *d = res(R_LOADER, &n);
+		WCHAR chk[MAX_PATH];
+		path(p, dir, L"CrossplayNetLib.dll");
+		path(chk, dir, L"ronfix\\loader-check.dll");
+		if (!d || !n)
+			return fail_io(L"read RoN-Fix's files from this setup");
+		if (!file_equals(p, d, n)) {
+			int refused = write_all(chk, d, n) && image_refused(chk);
+			DeleteFileW(chk);
+			if (refused) {
+				say(L"Windows' Smart App Control refused RoN-Fix's files on this PC, so nothing was installed: the game "
+				    L"would not have started. Press the \"Smart App Control...\" button to see what you can do.");
+				return 1;
+			}
 		}
 	}
+	/* 2. RoN-Fix's own new files first (harmless alone), then the loader: the original aside, the loader in, and the
+	 *    original straight back if that fails, so the game is never left without a file it needs. The loader goes
+	 *    last: it is the file that switches RoN-Fix on. */
+	if (!put_res(dir, L"ronfix-core.dll", R_CORE) || !put_res(dir, L"ronfix-update.dll", R_UPDATE))
+		return fail_io(L"copy RoN-Fix's files into the game folder");
+	path(p, dir, L"CrossplayNetLib.dll");
+	path(o, dir, L"CrossplayNetLib_orig.dll");
+	if (move_orig && !MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING))
+		return fail_io(L"keep the original game file aside");
+	if (!put_res(dir, L"CrossplayNetLib.dll", R_LOADER)) {
+		DWORD e = GetLastError();
+		if (move_orig)
+			MoveFileExW(o, p, MOVEFILE_REPLACE_EXISTING);
+		SetLastError(e);
+		return fail_io(L"copy RoN-Fix's files into the game folder");
+	}
+	/* the quit-crash fix needs no stand-in dssl.dll any more (since 0.15): the game's own goes back */
+	sound_restore(dir);
 	/* 3. settings */
 	path(p, dir, L"ronfix.ini");
 	if (!exists(p) && !put_res(dir, L"ronfix.ini", R_INI))
@@ -626,9 +705,9 @@ static int run_action(HWND owner, int restore, const WCHAR *dir, int updates, in
 
 /* ------------------------------------------------------------------ window */
 enum { ID_CHANGE = 10, ID_INSTALL, ID_RESTORE, ID_CLOSE, ID_UPDATES, ID_STATUS, ID_DIR, ID_LOGS, ID_LOGS_INFO, ID_BANS, ID_BAN_LIST,
-       ID_BAN_UNBAN };
+       ID_BAN_UNBAN, ID_SAC };
 static WCHAR gamedir[MAX_PATH];
-static HWND h_dir, h_status, h_install, h_restore, h_updates, h_logs, h_bans_text, h_bans;
+static HWND h_dir, h_status, h_install, h_restore, h_updates, h_logs, h_bans_text, h_bans, h_sac;
 
 /* asks once, before the first install: 1 send, 0 don't, -1 the player closed the question (install cancelled) */
 static int ask_logs(HWND w)
@@ -708,6 +787,7 @@ static void refresh(void)
 	SendMessageW(h_logs, BM_SETCHECK, consent_now(gamedir) ? BST_CHECKED : BST_UNCHECKED, 0);
 	SetWindowTextW(h_install, s == S_INSTALLED || s == S_OLD_RONFIX ? (rel >= RONFIX_RELEASE ? L"Reinstall" : L"Update") : L"Install");
 	bans_line();
+	ShowWindow(h_sac, sac_state() == 1 ? SW_SHOW : SW_HIDE);
 }
 
 static void pick_folder(HWND w)
@@ -891,7 +971,9 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 		ctl(w, L"STATIC", L"Game folder:", 0, 20, 92, 90, 20, 0, font);
 		h_dir = ctl(w, L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL | WS_BORDER, 20, 112, 420, 24, ID_DIR, font);
 		ctl(w, L"BUTTON", L"Change...", BS_PUSHBUTTON | WS_TABSTOP, 450, 111, 90, 26, ID_CHANGE, font);
-		h_status = ctl(w, L"STATIC", L"", 0, 20, 146, 520, 36, ID_STATUS, font);
+		h_status = ctl(w, L"STATIC", L"", 0, 20, 146, 380, 36, ID_STATUS, font);
+		/* only when Smart App Control is on: it can refuse unsigned RoN-Fix files */
+		h_sac = ctl(w, L"BUTTON", L"Smart App Control...", BS_PUSHBUTTON | WS_TABSTOP, 405, 146, 135, 26, ID_SAC, font);
 		h_updates = ctl(w, L"BUTTON", L"Keep RoN-Fix up to date automatically (recommended)", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 186,
 		                 520, 22, ID_UPDATES, font);
 		SendMessageW(h_updates, BM_SETCHECK, BST_CHECKED, 0);
@@ -943,6 +1025,9 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 		}
 		case ID_BANS:
 			bans_window(w);
+			return 0;
+		case ID_SAC:
+			MessageBoxW(w, sac_text, L"RoN-Fix: Windows' Smart App Control is on", MB_OK | MB_ICONINFORMATION);
 			return 0;
 		case ID_CLOSE:
 			DestroyWindow(w);

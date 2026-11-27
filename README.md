@@ -14,9 +14,14 @@ with or endorsed by Microsoft or the game's developers.
 New versions download by themselves while you play and are used from the next start.
 
 If Windows says the app was **blocked** and offers no "Run anyway", your PC has *Smart App Control*
-switched on, and RoN-Fix can't be installed on it for now. Smart App Control decides anew for every version:
-if it refuses a new version's files, RoN-Fix stays on the version you have, and Windows may show a "blocked"
-notice a few seconds after the game starts. Nothing breaks; the notice is harmless.
+switched on. It blocks programs Microsoft doesn't know yet and has no exceptions for single programs, and
+RoN-Fix isn't code-signed yet.
+
+- Smart App Control decides anew for every RoN-Fix version. If it refuses a new version, RoN-Fix stays on the
+  one you have (or steps aside, and the game runs as normal without the fixes).
+- Windows may then show a "blocked" notice; RoN-Fix tries that version again only a week later. Nothing breaks.
+- The **Smart App Control...** button in RoN-Fix (Start menu) explains your options. Switching Smart App
+  Control off is your decision, and RoN-Fix never changes it.
 
 ## Back to the original game
 
@@ -98,14 +103,13 @@ it by GitHub Actions, and anyone can rebuild a release and get byte-identical fi
 ### How it works
 
 RoN-Fix doesn't change the game's files on disk except the "large address aware" flag (4 GB of memory).
-Instead it puts two small stand-ins next to the game and keeps the originals beside them:
+Instead it puts one small stand-in next to the game and keeps the original beside it:
 
 | File in the game folder | Built from | What it does |
 |---|---|---|
 | `CrossplayNetLib.dll` | `proxy/loader.c` | Loader. Forwards everything to the game's own `CrossplayNetLib_orig.dll`, loads `ronfix-core.dll`, and runs the updater. If Windows refuses the core, or the player holds Shift at start, the game runs as the original. |
-| `ronfix-core.dll` | `proxy/netproxy.c` (+ `steamlink.c`, `lobbyfix.c`, `ghostroom.c`, `turndelay.c`) | The fixes. Each checks the exact game build first and switches itself off on any other build. |
+| `ronfix-core.dll` | `proxy/netproxy.c` (+ `steamlink.c`, `lobbyfix.c`, `ghostroom.c`, `turndelay.c`, `soundfix.c`) | The fixes, including the one for the crash on quit, which it applies in memory to the game's own `dssl.dll`. Each fix checks the exact game build first and switches itself off on any other build. |
 | `ronfix-update.dll` | `proxy/update.c` | Updater. Fetches the release manifest, checks its signature and every file's SHA-256, and installs only what changed. |
-| `dssl.dll` | `proxy/sndproxy.c` | Sound stand-in. Fixes the crash on quit, then forwards to the game's `dssl_orig.dll`. |
 | `ronfix\RoN-Fix.exe` | `setup/setup.c` | Setup and the Start menu app: install, restore the original game, unban players. |
 
 `logserver/` is the log service: a Cloudflare Worker that receives logs from players who agreed to send them,
@@ -120,9 +124,11 @@ PowerShell. Set `LLVM_MINGW` to its folder, or put it in `%USERPROFILE%\Tools\ll
 powershell -ExecutionPolicy Bypass -File tools\build-setup.ps1 -Release 99 -Name test -NoSign
 ```
 
-This builds the four DLLs into `proxy\build\` and a complete release, setup included, into `dist\release-99\`.
-The same source always gives byte-identical files, with every file carrying version information (product
-"RoN-Fix", version = the release name).
+This builds the three DLLs into `proxy\build\` and a complete release, setup included, into `dist\release-99\`.
+The same source always gives byte-identical files. Every file carries version information (product
+"RoN-Fix", version = the release name), except the loader: it keeps the version of the release that last changed
+it, so it stays byte-identical and updates leave it alone. The game cannot start without the loader, so it
+should only change when it has to.
 
 ### Tests
 
@@ -138,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File tools\run-thunk-tests.ps1
 
 The [release workflow](.github/workflows/release.yml) runs on a GitHub-hosted Windows runner:
 
-1. It builds the four DLLs from this repository, and SignPath code-signs them.
+1. It builds the three DLLs from this repository, and SignPath code-signs them.
 2. It builds the setup around the signed DLLs, because the setup installs them, and SignPath signs the setup.
 3. It lists every file's SHA-256 in `manifest.txt`.
 4. It creates the GitHub release as a draft, with every file attached and a link to the run.

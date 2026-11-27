@@ -280,6 +280,31 @@ static void test_update(void)
 	r = update_check();
 	check(r == 3 && file_is(gdir, L"ronfix\\version.txt", "4 0.7-test\r\n"), "update: a release for another game build is not installed");
 
+	/* the game has restarted since release 4: the core moved to ronfix\previous is no longer loaded */
+	if (held_img)
+		FreeLibrary(held_img);
+	held_img = 0;
+
+	/* release 6, which Windows refuses on this PC: tried once, then not again for a week (no notice at every start) */
+	wjoin(p, MAX_PATH, serve, L"ronfix-core.dll", 0);
+	write_file(p, "new core 6", 10);
+	file_line(l2, "ronfix-core.dll", "ronfix-core.dll", "new core 6");
+	wsprintfA(m, "ronfix-manifest 1\nversion 6\nname 0.9\n%s%s%s", l1, l2, l3);
+	publish(m, 1);
+	test_day = 1000, test_refuse_image = 1, test_image_checks = 0;
+	r = update_check();
+	int refused_checks = test_image_checks;
+	check(r == 6 && refused_checks == 1 && file_is(gdir, L"ronfix-core.dll", "new core 4") && file_is(gdir, L"ronfix\\version.txt", "4 0.7-test\r\n"),
+	      "update: a release Windows refuses is not installed, nothing changes");
+	test_day = 1006;
+	r = update_check();
+	check(r == 6 && test_image_checks == refused_checks, "update: 6 days later the refused release is not tried again (no download, no test load)");
+	test_day = 1007, test_refuse_image = 0;
+	r = update_check();
+	check(r == 0 && file_is(gdir, L"ronfix-core.dll", "new core 6") && file_is(gdir, L"ronfix\\version.txt", "6 0.9\r\n"),
+	      "update: a week later it is tried again, and installs once Windows allows it");
+	test_day = 0;
+
 	/* feed offline */
 	WritePrivateProfileStringW(L"update", L"Url", L"http://127.0.0.1:9/", ini);
 	r = update_check();

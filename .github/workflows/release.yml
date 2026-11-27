@@ -5,7 +5,7 @@
 #   secret    SIGNPATH_API_TOKEN
 #   variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG,
 #             SIGNPATH_DLLS_CONFIG, SIGNPATH_SETUP_CONFIG (artifact configuration slugs; empty = the default one)
-# Order: the four DLLs are signed first, then the setup is built around the signed DLLs (it installs them) and
+# Order: the DLLs are signed first, then the setup is built around the signed DLLs (it installs them) and
 # signed itself. Every signing request waits for a maintainer's approval on SignPath. Without the secret the
 # release is built unsigned.
 # At the end the workflow creates the GitHub release itself, as a DRAFT with every file attached (notes from
@@ -78,7 +78,6 @@ jobs:
             proxy/build/CrossplayNetLib.dll
             proxy/build/ronfix-core.dll
             proxy/build/ronfix-update.dll
-            proxy/build/dssl.dll
           if-no-files-found: error
       - name: Sign the DLLs (approve the request on SignPath)
         if: env.SIGNING == 'true'
@@ -97,7 +96,7 @@ jobs:
         if: env.SIGNING == 'true'
         shell: pwsh
         run: |
-          foreach ($f in 'CrossplayNetLib.dll', 'ronfix-core.dll', 'ronfix-update.dll', 'dssl.dll') {
+          foreach ($f in 'CrossplayNetLib.dll', 'ronfix-core.dll', 'ronfix-update.dll') {
             $s = Get-AuthenticodeSignature "signed\dlls\$f"
             if ($s.Status -ne 'Valid') { throw "${f}: signature $($s.Status)" }
             Copy-Item "signed\dlls\$f" "proxy\build\$f" -Force

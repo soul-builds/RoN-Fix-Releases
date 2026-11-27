@@ -20,7 +20,8 @@ if ($Dll -and [IntPtr]::Size -ne 4) {
 if ($Dll) {
 	Add-Type -Namespace S -Name T -MemberDefinition ('[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_run(int action, string dir, string self, System.Text.StringBuilder o, int cap);' +
 		'[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_bans_list(string dir, System.Text.StringBuilder o, int cap);' +
-		'[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_bans_unban(string dir, int row);')
+		'[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_bans_unban(string dir, int row);' +
+		'[DllImport(@"' + $Dll + '")] public static extern void setup_test_refuse_loader(int on);')
 }
 $steam = 'C:\Program Files (x86)\Steam\steamapps\common\Rise of Nations'
 $g = Join-Path ([IO.Path]::GetTempPath()) ('ronfix-setup-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -56,7 +57,8 @@ function ClearLaa($p) {
 try {
 	Copy-Item "$steam\riseofnations.exe", "$steam\patriots.exe" $g
 	Copy-Item "$steam\CrossplayNetLib_orig.dll" "$g\CrossplayNetLib.dll"
-	Copy-Item "$steam\dssl_orig.dll" "$g\dssl.dll"
+	# the game's own dssl.dll: kept as dssl_orig.dll by RoN-Fix up to 0.14, back in place from 0.15 on
+	Copy-Item $(if (Test-Path "$steam\dssl_orig.dll") { "$steam\dssl_orig.dll" } else { "$steam\dssl.dll" }) "$g\dssl.dll"
 	ClearLaa "$g\riseofnations.exe"; ClearLaa "$g\patriots.exe"
 	$orig = @{}; foreach ($f in 'riseofnations.exe', 'patriots.exe', 'CrossplayNetLib.dll', 'dssl.dll') { $orig[$f] = Get-Sha "$g\$f" }
 	Check (-not (Laa "$g\riseofnations.exe") -and (SumOk "$g\riseofnations.exe")) 'scratch game: fresh exe without the 4 GB flag'
@@ -67,7 +69,7 @@ try {
 	Check ($code -eq 0) "install: exit 0 ($lastmsg)"
 	$rel = Join-Path (Split-Path -Parent $PSScriptRoot) 'proxy\build'
 	Check ((Get-Sha "$g\CrossplayNetLib.dll") -eq (Get-Sha "$rel\CrossplayNetLib.dll") -and (Get-Sha "$g\CrossplayNetLib_orig.dll") -eq $orig['CrossplayNetLib.dll']) 'install: loader in, original kept as CrossplayNetLib_orig.dll'
-	Check ((Get-Sha "$g\dssl_orig.dll") -eq $orig['dssl.dll'] -and (Test-Path "$g\ronfix-core.dll") -and (Test-Path "$g\ronfix-update.dll")) 'install: sound stand-in, core and updater in'
+	Check ((Get-Sha "$g\dssl.dll") -eq $orig['dssl.dll'] -and -not (Test-Path "$g\dssl_orig.dll") -and (Test-Path "$g\ronfix-core.dll") -and (Test-Path "$g\ronfix-update.dll")) 'install: core and updater in; the game''s own dssl.dll untouched (no stand-in since 0.15)'
 	Check ((Laa "$g\riseofnations.exe") -and (Laa "$g\patriots.exe") -and (SumOk "$g\riseofnations.exe") -and (SumOk "$g\patriots.exe")) 'install: 4 GB flag on both exes, header checksums valid'
 	$ini = Get-Content "$g\ronfix.ini" -Raw
 	Check ($ini -match 'WaitReportSeconds=30' -and $ini -match '\[update\][^\[]*Enabled=1' -and $ini -match '\[lobby\]' -and $ini -match 'Off=0') "install: the player's setting kept, new settings added"
@@ -86,6 +88,23 @@ try {
 	Copy-Item "$g\CrossplayNetLib_orig.dll" "$g\CrossplayNetLib.dll" -Force
 	$code = Run @('--install', "`"$g`"", '--no-shortcut')
 	Check ($code -eq 0 -and (Get-Sha "$g\CrossplayNetLib.dll") -eq (Get-Sha "$rel\CrossplayNetLib.dll") -and (Get-Sha "$g\CrossplayNetLib_orig.dll") -eq $orig['CrossplayNetLib.dll']) 'install after Steam restored a file: loader back in'
+
+	# an install from 0.14 or older: a stand-in dssl.dll with the game's own kept as dssl_orig.dll -> the original back
+	Copy-Item "$g\dssl.dll" "$g\dssl_orig.dll" -Force
+	Set-Content "$g\dssl.dll" 'old RoN-Fix sound stand-in'
+	$code = Run @('--install', "`"$g`"", '--no-shortcut')
+	Check ($code -eq 0 -and (Get-Sha "$g\dssl.dll") -eq $orig['dssl.dll'] -and -not (Test-Path "$g\dssl_orig.dll") -and (Get-Content "$g\ronfix\previous\dssl-standin.dll") -eq 'old RoN-Fix sound stand-in') 'install over 0.14: the game''s own dssl.dll is back, the stand-in kept in ronfix\previous'
+
+	if ($Dll) {
+		# a loader Windows would refuse (Smart App Control) is not put in: the game could not start
+		Copy-Item "$g\CrossplayNetLib_orig.dll" "$g\CrossplayNetLib.dll" -Force
+		[S.T]::setup_test_refuse_loader(1)
+		$code = Run @('--install', "`"$g`"", '--no-shortcut')
+		[S.T]::setup_test_refuse_loader(0)
+		Check ($code -eq 1 -and $lastmsg -match 'Smart App Control' -and (Get-Sha "$g\CrossplayNetLib.dll") -eq $orig['CrossplayNetLib.dll'] -and -not (Test-Path "$g\ronfix\loader-check.dll")) "loader Windows would refuse: not installed, the game keeps its own file ($lastmsg)"
+		$code = Run @('--install', "`"$g`"", '--no-shortcut')
+		Check ($code -eq 0 -and (Get-Sha "$g\CrossplayNetLib.dll") -eq (Get-Sha "$rel\CrossplayNetLib.dll")) 'loader allowed again: installs'
+	}
 
 	# files that are already right are not written again: Smart App Control judges a rewritten DLL afresh, even when
 	# its bytes did not change (it blocked a rewritten dssl.dll on 2026-11-27). ronfix\RoN-Fix.exe is not measured:

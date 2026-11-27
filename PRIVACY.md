@@ -14,7 +14,8 @@ most 1 MB of each per game start:
 - match timing: command delay, and per player ping, waiting time, lag and frame time;
 - loading-screen timing: when each player finished each loading step;
 - problems RoN-Fix caught (crashes it prevented, missing players), and update results;
-- RoN-Fix's version, and a random install code that groups uploads from the same installation.
+- RoN-Fix's version, whether Windows' Smart App Control is on, and a random install code that groups uploads
+  from the same installation.
 
 ## What is not sent
 

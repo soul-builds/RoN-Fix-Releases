@@ -11,8 +11,10 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools\finish-release.ps1 -Name 0.14
   powershell -ExecutionPolicy Bypass -File tools\finish-release.ps1 -Name 0.14 -Rebuild
+  -NoPublish: everything up to the signature here, nothing uploaded, the draft stays a draft (for tests)
 #>
-param([Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z._-]{1,30}$')][string]$Name, [switch]$Rebuild, [string]$Repo = 'soul-builds/RoN-Fix')
+param([Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z._-]{1,30}$')][string]$Name, [switch]$Rebuild, [switch]$NoPublish,
+      [string]$Repo = 'soul-builds/RoN-Fix')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $tag = "v$Name"
@@ -63,6 +65,7 @@ New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item "$tmp\*" $out
 & powershell -NoProfile -ExecutionPolicy Bypass -File "$root\tools\sign-manifest.ps1" "$out\manifest.txt"
 if ($LASTEXITCODE) { throw 'signing failed' }
+if ($NoPublish) { "checked and signed here; nothing uploaded, $tag is still a draft"; Remove-Item -Recurse -Force $tmp; return }
 Invoke-Gh release upload $tag "$out\manifest.txt.sig" -R $Repo | Out-Null
 Invoke-Gh release edit $tag -R $Repo --draft=false --latest | Out-Null
 Remove-Item -Recurse -Force $tmp

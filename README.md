@@ -23,6 +23,11 @@ switched on, and RoN-Fix can't be installed on it for now.
 - **For one start:** hold **Shift** while the game starts, or add `-original` to the game's launch
   options in Steam.
 
+## If the game doesn't start
+
+Start it once more: if Windows refused part of RoN-Fix, RoN-Fix steps aside by itself and the game starts
+as the original. If it still won't start, use Steam's *Verify integrity of game files* (see above).
+
 ## What it fixes
 
 - The game sometimes freezing on startup before its window appears.

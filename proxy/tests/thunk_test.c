@@ -182,6 +182,7 @@ static void test_g3(void)
 
 #include "lobby_tests.c"
 #include "steam_tests.c"
+#include "rfx_tests.c"
 #include "lobbyfix_tests.c"
 #include "ghostroom_tests.c"
 #include "soundfix_tests.c"
@@ -194,6 +195,8 @@ __declspec(dllexport) int __stdcall run_thunk_tests(char *buf, int len)
 	test_g3();
 	test_lobby();
 	test_steam();
+	test_mirror();
+	test_rfx();
 	test_lobbyfix();
 	test_ghostroom();
 	test_soundfix();

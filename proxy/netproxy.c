@@ -22,6 +22,10 @@
  *        leaving the lobby it created, that lobby is left the way the game's own Leave would. [lobby] GhostRoom=1.
  *   v16: the quit-crash fix runs in memory on the game's own dssl.dll (soundfix.c) instead of a stand-in dssl.dll that
  *        Smart App Control kept refusing; old installs get their original dssl.dll back. Logs Smart App Control's state.
+ *   v17: Steam mirror (steamlink.c + rfxstream.c), stage 1 of moving the game's traffic to Steam: every message this
+ *        PC sends also travels, numbered, over Steam to players who have the mirror on, and is compared on arrival
+ *        with what PlayFab delivered. The game still uses PlayFab's only. [steam] Mirror=1, off by default.
+ *        Slot 21 (send to one player) is hooked for it, pass-through.
  *
  * How RoN drops a player (reverse/netcode-map.md, "How a player actually gets dropped"): every
  * client must report having lost them; when all have, the game drops them at the same turn on all
@@ -225,6 +229,13 @@ static int THISCALL w_set_allow_timeout(void *self, int on)
 	return ((m1)orig_vt[18])(self, on);
 }
 
+/* mirror (steamlink.c, included further down): every message this PC sends also goes, numbered, over Steam */
+static void sl_mirror_out(const unsigned char *peer, const void *data, int len, int direct);
+static void sl_mirror_party(const unsigned char *sender, const unsigned char *buf, unsigned len);
+static void sl_data_poll(void);
+
+/* slot 22: broadcast(buf, len, flag), ret 0xC (0x10017910; the DLL ignores flag). With our vtable copy in place
+ * the network DLL's own packets (pulse, ready flag, desync ...) come through here too. */
 static unsigned long bc_count, bc_bytes, bc_last_report;
 static int THISCALL w_broadcast(void *self, int data, int len, int flag)
 {
@@ -244,7 +255,20 @@ static int THISCALL w_broadcast(void *self, int data, int len, int flag)
 			bc_last_report = now;
 		}
 	}
-	return ((m3)orig_vt[22])(self, data, len, flag);
+	int r = ((m3)orig_vt[22])(self, data, len, flag);
+	sl_mirror_out(NULL, (const void *)(UINT_PTR)data, len, 0);
+	return r;
+}
+
+/* slot 21: send_to_peer(buf, len, peer, flag), ret 0x10 (0x100177F0): the time sync to the host and its echo, file
+ * transfer, and the DLL's goodbye to each player. Passed through unchanged; the mirror gets a copy. */
+typedef int(THISCALL *m4)(void *, int, int, int, int);
+static int THISCALL w_send_to_peer(void *self, int data, int len, int peer, int flag)
+{
+	int r = ((m4)orig_vt[21])(self, data, len, peer, flag);
+	if (peer)
+		sl_mirror_out((const unsigned char *)(UINT_PTR)peer, (const void *)(UINT_PTR)data, len, 1);
+	return r;
 }
 
 static int THISCALL w_disconnect(void *self, int flag)
@@ -549,7 +573,7 @@ static void sl_player_label(int player, char *out);
 static int THISCALL w_waiting(void *self, int player, int ms)
 {
 	DWORD now = GetTickCount();
-	char st[300], who[80];
+	char st[512], who[80];
 	sl_wait_pass(player, (unsigned)ms);
 	if (player != wait_player || now - wait_last_call > 2000) {
 		sl_player_label(player, who);
@@ -580,10 +604,12 @@ static int THISCALL w_check_pulse(void *self)
 	telemetry_tick(self);
 	if (lobby_log || lf_enabled || td_capable) /* the lobby fixes and the delay negotiation reuse these scans */
 		lobby_tick(self);
-	if (exe_ok)
+	if (exe_ok) {
 		steam_tick(self);
+		sl_data_poll(); /* mirror: Steam's frames of this pass, before the game takes PlayFab's (w_pop) */
+	}
 	if (wait_player >= 0 && GetTickCount() - wait_last_call > 1500) {
-		char st[300];
+		char st[512];
 		sl_wait_text(st, 1);
 		logline("WAIT END player=%d (no wait call for 1.5 s)%s", wait_player, st);
 		sl_wait_over();
@@ -1436,6 +1462,8 @@ typedef int(THISCALL *pop_fn)(void *, void *, void **, unsigned *);
 static int THISCALL w_pop(void *self, void *buf, void **sender, unsigned *len)
 {
 	int r = ((pop_fn)orig_vt[23])(self, buf, sender, len);
+	if ((r & 0xff) && buf && len && sender && *sender)
+		sl_mirror_party((const unsigned char *)*sender, (const unsigned char *)buf, *len);
 	if ((r & 0xff) && lobby_log && buf && len && *len == 5 && *(unsigned char *)buf == 0x0A) {
 		unsigned char *peer = sender ? (unsigned char *)*sender : 0, *local = 0;
 		char name[48];
@@ -1544,6 +1572,8 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 		lstrcpyA(lf_ban_path, dir);
 		lstrcatA(lf_ban_path, "ronfix-bans.txt");
 		sl_enabled = (int)GetPrivateProfileIntA("steam", "Shadow", 1, ini);
+		sl_mirror = (int)GetPrivateProfileIntA("steam", "Mirror", 0, ini);
+		sl_selftest = sl_mirror && (int)GetPrivateProfileIntA("steam", "SelfTest", 0, ini); /* one-PC testing only */
 		{ /* our release number for the Steam link's hello: ronfix\version.txt, first number */
 			char vp[MAX_PATH], vb[16];
 			DWORD got = 0;
@@ -1557,7 +1587,7 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 			for (DWORD k = 0; k < got && vb[k] >= '0' && vb[k] <= '9'; k++)
 				sl_release_no = sl_release_no * 10 + (unsigned)(vb[k] - '0');
 		}
-		logline("==== RoN-Fix core v16, pid %lu; exe build %s; fix A %s (report after %d s without turn data); fix B (desync-vote crash) %s",
+		logline("==== RoN-Fix core v17, pid %lu; exe build %s; fix A %s (report after %d s without turn data); fix B (desync-vote crash) %s",
 		        GetCurrentProcessId(), exe_ok ? "ok" : "UNKNOWN", exe_ok && report_ms > 0 ? "ON" : "OFF",
 		        report_ms / 1000, exe_ok ? "ON" : "OFF");
 		sac_log();
@@ -1619,6 +1649,7 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 		our_vt[14] = (void *)w_send_desync;
 		our_vt[15] = (void *)w_check_pulse;
 		our_vt[18] = (void *)w_set_allow_timeout;
+		our_vt[21] = (void *)w_send_to_peer;
 		our_vt[22] = (void *)w_broadcast;
 		our_vt[23] = (void *)w_pop;
 		our_vt[31] = (void *)w_disconnect;

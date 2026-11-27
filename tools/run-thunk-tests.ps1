@@ -9,8 +9,8 @@ $ErrorActionPreference = 'Stop'
 if ($Inner) {
 	# runs inside 32-bit PowerShell
 	Add-Type -Namespace T -Name D -MemberDefinition ('[DllImport(@"' + $Dll + '")] public static extern int ' + $Fn + '(System.Text.StringBuilder b, int n);')
-	$sb = New-Object System.Text.StringBuilder 16384
-	$f = [T.D]::$Fn($sb, 16384)
+	$sb = New-Object System.Text.StringBuilder 65536  # one line per test; 16384 no longer held them all
+	$f = [T.D]::$Fn($sb, 65536)
 	$sb.ToString()
 	exit $f
 }

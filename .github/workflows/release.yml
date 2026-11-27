@@ -1,0 +1,175 @@
+# Builds a RoN-Fix release from this repository on a GitHub-hosted runner, so every file can be traced to the
+# source code. Started by hand: Actions > release > Run workflow, with the release number and name.
+#
+# Code signing (SignPath.io, certificate by SignPath Foundation) happens in between when the repository has
+#   secret    SIGNPATH_API_TOKEN
+#   variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG,
+#             SIGNPATH_DLLS_CONFIG, SIGNPATH_SETUP_CONFIG (artifact configuration slugs; empty = the default one)
+# Order: the four DLLs are signed first, then the setup is built around the signed DLLs (it installs them) and
+# signed itself. Every signing request waits for a maintainer's approval on SignPath. Without the secret the
+# release is built unsigned.
+# At the end the workflow creates the GitHub release itself, as a DRAFT with every file attached (notes from
+# release-notes/v<name>.md if that file exists). The update manifest is NOT signed here: its key never leaves the
+# maintainer's PC, so a stolen GitHub login cannot push an update to players. The maintainer runs
+# tools/finish-release.ps1 -Name <name>: it checks the draft's files against the manifest, signs the manifest,
+# adds manifest.txt.sig (the only file not made here) and publishes the release.
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release number (the updater compares these), e.g. 14'
+        required: true
+      name:
+        description: 'Version name shown to players, e.g. 0.14'
+        required: true
+
+permissions:
+  contents: read
+  actions: read   # SignPath's action reads the job's details and the uploaded artifact with the GitHub token
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write # the draft release
+      actions: read
+    env:
+      REL: ${{ inputs.release }}
+      NAME: ${{ inputs.name }}
+      SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inputs
+        shell: pwsh
+        run: |
+          if ($env:REL -notmatch '^[0-9]{1,4}$') { throw "release must be a number, not '$env:REL'" }
+          if ($env:NAME -notmatch '^[0-9A-Za-z._-]{1,30}$') { throw "name: letters, digits, '.', '_', '-' only, not '$env:NAME'" }
+          "Release $env:REL ($env:NAME), code signing: $env:SIGNING"
+      - name: Compiler cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\llvm-mingw-20261104-ucrt-x86_64
+          key: llvm-mingw-20261104-ucrt-x86_64
+      - name: Compiler (llvm-mingw 20261104 = LLVM 23.1.5)
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Invoke-WebRequest https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-x86_64.zip -OutFile $zip
+          $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($h -ne '552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f') { throw "llvm-mingw checksum mismatch: $h" }
+          7z x $zip "-o$env:RUNNER_TEMP" -y | Out-Null
+
+      - name: Build the DLLs
+        shell: powershell
+        env:
+          LLVM_MINGW: ${{ runner.temp }}\llvm-mingw-20261104-ucrt-x86_64
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-setup.ps1 -Release $env:REL -Name $env:NAME -NoSign -Stage dlls
+      - name: Upload the DLLs for signing
+        id: unsigned-dlls
+        if: env.SIGNING == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-dlls
+          path: |
+            proxy/build/CrossplayNetLib.dll
+            proxy/build/ronfix-core.dll
+            proxy/build/ronfix-update.dll
+            proxy/build/dssl.dll
+          if-no-files-found: error
+      - name: Sign the DLLs (approve the request on SignPath)
+        if: env.SIGNING == 'true'
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_DLLS_CONFIG }}
+          github-artifact-id: ${{ steps.unsigned-dlls.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed/dlls
+      - name: Put the signed DLLs into the build
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        run: |
+          foreach ($f in 'CrossplayNetLib.dll', 'ronfix-core.dll', 'ronfix-update.dll', 'dssl.dll') {
+            $s = Get-AuthenticodeSignature "signed\dlls\$f"
+            if ($s.Status -ne 'Valid') { throw "${f}: signature $($s.Status)" }
+            Copy-Item "signed\dlls\$f" "proxy\build\$f" -Force
+          }
+
+      - name: Build the setup around the DLLs
+        shell: powershell
+        env:
+          LLVM_MINGW: ${{ runner.temp }}\llvm-mingw-20261104-ucrt-x86_64
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-setup.ps1 -Release $env:REL -Name $env:NAME -NoSign -Stage setup
+      - name: Upload the setup for signing
+        id: unsigned-setup
+        if: env.SIGNING == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-setup
+          path: dist/release-${{ inputs.release }}/RoN-Fix-Setup.exe
+          if-no-files-found: error
+      - name: Sign the setup (approve the request on SignPath)
+        if: env.SIGNING == 'true'
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_SETUP_CONFIG }}
+          github-artifact-id: ${{ steps.unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed/setup
+      - name: Put the signed setup into the release
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature 'signed\setup\RoN-Fix-Setup.exe'
+          if ($s.Status -ne 'Valid') { throw "setup: signature $($s.Status)" }
+          Copy-Item 'signed\setup\RoN-Fix-Setup.exe' "dist\release-$env:REL\RoN-Fix-Setup.exe" -Force
+
+      - name: Manifest (unsigned; the maintainer signs it)
+        shell: powershell
+        env:
+          LLVM_MINGW: ${{ runner.temp }}\llvm-mingw-20261104-ucrt-x86_64
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-setup.ps1 -Release $env:REL -Name $env:NAME -NoSign -Stage manifest
+      - name: Checksums
+        shell: pwsh
+        run: |
+          "### RoN-Fix $env:NAME (release $env:REL), code signing: $env:SIGNING" >> $env:GITHUB_STEP_SUMMARY
+          '| file | SHA-256 | signature |' >> $env:GITHUB_STEP_SUMMARY
+          '|---|---|---|' >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem "dist\release-$env:REL" -File | ForEach-Object {
+            $sig = if ($_.Extension -in '.dll', '.exe') { (Get-AuthenticodeSignature $_.FullName).Status } else { '-' }
+            "| $($_.Name) | ``$((Get-FileHash $_.FullName).Hash.ToLower())`` | $sig |" >> $env:GITHUB_STEP_SUMMARY
+          }
+      - name: Release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: RoN-Fix-${{ inputs.name }}-release-${{ inputs.release }}
+          path: dist/release-${{ inputs.release }}/
+          if-no-files-found: error
+      - name: Draft the GitHub release (the maintainer signs the manifest and publishes it)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:NAME"
+          $run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $notes = if (Test-Path "release-notes\$tag.md") { Get-Content -Raw "release-notes\$tag.md" } else { "RoN-Fix $env:NAME" }
+          $notes += "`n`n---`nBuilt on GitHub Actions by [this run]($run) from commit $env:GITHUB_SHA. Every file's SHA-256 is on the run's page and in manifest.txt."
+          $file = Join-Path $env:RUNNER_TEMP 'notes.md'
+          [IO.File]::WriteAllText($file, $notes)
+          $assets = Get-ChildItem "dist\release-$env:REL" -File | ForEach-Object { $_.FullName }
+          gh release create $tag --draft --target $env:GITHUB_SHA --title "RoN-Fix $env:NAME" --notes-file $file @assets
+          if ($LASTEXITCODE) { throw 'gh release create failed' }
+          "Draft release $tag created: finish it with tools/finish-release.ps1 -Name $env:NAME" >> $env:GITHUB_STEP_SUMMARY

@@ -1,0 +1,3 @@
+LIBRARY ronfix-update.dll
+EXPORTS
+    ronfix_update

@@ -1,0 +1,21 @@
+# RoN-Fix log service. Deploy (once the Cloudflare account exists):
+#   npx wrangler d1 create ronfix-logs            -> put the database_id below
+#   npx wrangler d1 execute ronfix-logs --remote --file schema.sql
+#   npx wrangler secret put ID_KEY                 (random, 32+ bytes; keep a copy: codes change without it)
+#   npx wrangler secret put READ_TOKEN             (random; tools/fetch-logs.ps1 uses it)
+#   npx wrangler deploy
+name = "ronfix-logs"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+KEEP_DAYS = "180"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ronfix-logs"
+database_id = "<your D1 database id>"   # from: npx wrangler d1 create ronfix-logs
+
+[triggers]
+crons = ["17 3 * * *"]   # daily: delete rows older than KEEP_DAYS

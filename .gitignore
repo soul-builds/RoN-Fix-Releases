@@ -1,0 +1,12 @@
+# build output
+proxy/build/
+dist/
+setup/setup.res
+setup/version.h
+setup/verinfo.rc
+proxy/tests/*.dll
+setup/tests/*.dll
+
+# log service
+logserver/node_modules/
+logserver/.wrangler/

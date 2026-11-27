@@ -92,9 +92,72 @@ Player names and IDs are replaced with codes before anything is stored. Details:
 
 ## Source code
 
-RoN-Fix's own code is open source under the MIT licence:
-[soul-builds/RoN-Fix-Source](https://github.com/soul-builds/RoN-Fix-Source). Releases are built from it on GitHub,
-and anyone can rebuild them and get byte-identical files.
+This repository holds RoN-Fix's own source code, under the [MIT licence](LICENSE). Every release is built from
+it by GitHub Actions, and anyone can rebuild a release and get byte-identical files.
+
+### How it works
+
+RoN-Fix doesn't change the game's files on disk except the "large address aware" flag (4 GB of memory).
+Instead it puts two small stand-ins next to the game and keeps the originals beside them:
+
+| File in the game folder | Built from | What it does |
+|---|---|---|
+| `CrossplayNetLib.dll` | `proxy/loader.c` | Loader. Forwards everything to the game's own `CrossplayNetLib_orig.dll`, loads `ronfix-core.dll`, and runs the updater. If Windows refuses the core, or the player holds Shift at start, the game runs as the original. |
+| `ronfix-core.dll` | `proxy/netproxy.c` (+ `steamlink.c`, `lobbyfix.c`, `ghostroom.c`, `turndelay.c`) | The fixes. Each checks the exact game build first and switches itself off on any other build. |
+| `ronfix-update.dll` | `proxy/update.c` | Updater. Fetches the release manifest, checks its signature and every file's SHA-256, and installs only what changed. |
+| `dssl.dll` | `proxy/sndproxy.c` | Sound stand-in. Fixes the crash on quit, then forwards to the game's `dssl_orig.dll`. |
+| `ronfix\RoN-Fix.exe` | `setup/setup.c` | Setup and the Start menu app: install, restore the original game, unban players. |
+
+`logserver/` is the log service: a Cloudflare Worker that receives logs from players who agreed to send them,
+and replaces names and IDs with codes before anything is stored.
+
+### Building
+
+You need [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (release 20261104, i686 target) and Windows
+PowerShell. Set `LLVM_MINGW` to its folder, or put it in `%USERPROFILE%\Tools\llvm-mingw`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-setup.ps1 -Release 99 -Name test -NoSign
+```
+
+This builds the four DLLs into `proxy\build\` and a complete release, setup included, into `dist\release-99\`.
+The same source always gives byte-identical files, with every file carrying version information (product
+"RoN-Fix", version = the release name).
+
+### Tests
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\run-thunk-tests.ps1
+```
+
+- **What it covers:** the core, the updater (including an update over HTTP from a local server) and the log
+  upload. GitHub Actions runs them on every push.
+- **The setup test** (`tools\test-setup.ps1`) needs a Steam copy of the game, so it runs only on a developer PC.
+
+### Releases
+
+The [release workflow](.github/workflows/release.yml) runs on a GitHub-hosted Windows runner:
+
+1. It builds the four DLLs from this repository, and SignPath code-signs them.
+2. It builds the setup around the signed DLLs, because the setup installs them, and SignPath signs the setup.
+3. It lists every file's SHA-256 in `manifest.txt`.
+4. It creates the GitHub release as a draft, with every file attached and a link to the run.
+
+The maintainer then runs `tools\finish-release.ps1`, which:
+
+- checks the draft's files against the manifest;
+- signs `manifest.txt` with the update key (ECDSA P-256);
+- adds `manifest.txt.sig`, the only file not made by the workflow;
+- publishes the release.
+
+The update key never goes to GitHub: an installed copy only accepts files listed in a manifest signed by one of
+the keys in `proxy/update_keys.h`. So even a stolen GitHub login cannot push an update to players.
+
+### What is not here
+
+The comments mention analysis notes (`reverse/...`). Those notes, the game's decompiled code and anything
+derived from the game's data stay private, because they contain material from the game itself. This
+repository holds only RoN-Fix's own code.
 
 ## Code signing policy
 
@@ -105,5 +168,10 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 - Approvers: [soul-builds](https://github.com/soul-builds)
 - Privacy policy: [PRIVACY.md](PRIVACY.md)
 
-Status: applying to SignPath Foundation (November 2026). Releases up to 0.13 are not code-signed; signing starts
+Status: applied to SignPath Foundation in November 2026. Releases up to 0.13 are not code-signed; signing starts
 with the first release after the project is accepted.
+
+## Licence
+
+RoN-Fix's own code is under the [MIT licence](LICENSE). Rise of Nations and its files belong to their owners
+and are not part of this repository.

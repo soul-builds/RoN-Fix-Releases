@@ -1,0 +1,44 @@
+# Runs the 32-bit test DLLs on a GitHub Windows runner. Locally, Windows Smart App Control blocks some
+# unsigned rebuilt test DLLs at random (reverse/distribution.md), so CI is the reliable place to run them.
+# The setup test (tools/test-setup.ps1) needs the game's files and stays local.
+name: tests
+on:
+  push:
+    paths: ['proxy/**', 'setup/**', 'logserver/**', 'tools/run-thunk-tests.ps1', '.github/workflows/tests.yml']
+  workflow_dispatch:
+
+jobs:
+  proxy:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            proxy
+            setup
+            tools
+            logserver
+      - name: Log service tests (Cloudflare Worker code, in Node)
+        working-directory: logserver
+        run: node --test test/worker.test.mjs
+      - name: Compiler cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\llvm-mingw-20261104-ucrt-x86_64
+          key: llvm-mingw-20261104-ucrt-x86_64
+      - name: Compiler (llvm-mingw 20261104 = LLVM 23.1.5, the same as the dev PC)
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Invoke-WebRequest https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-x86_64.zip -OutFile $zip
+          $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($h -ne '552191b5754c49a5a20723276a6fc56541ea1922c4c50b7b669022333fc1b40f') { throw "llvm-mingw checksum mismatch: $h" }
+          7z x $zip "-o$env:RUNNER_TEMP" -y | Out-Null
+      - name: Tests (core thunks, lobby logging, telemetry; updater incl. an update over HTTP)
+        shell: powershell
+        env:
+          LLVM_MINGW: ${{ runner.temp }}\llvm-mingw-20261104-ucrt-x86_64
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-thunk-tests.ps1

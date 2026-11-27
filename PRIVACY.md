@@ -35,7 +35,7 @@ problem can be followed across games, but the name or ID cannot be read back fro
 RoN-Fix also does two things that send no logs and no personal data:
 
 - **Update checks:** about 20 seconds after the game starts, RoN-Fix downloads its update list from GitHub
-  (github.com/soul-builds/RoN-Fix-Releases), and new files from there when there is a new version. GitHub sees
+  (github.com/soul-builds/RoN-Fix), and new files from there when there is a new version. GitHub sees
   your IP address, as with any download. To switch this off, untick "Keep RoN-Fix up to date" when you install, or
   set `Enabled=0` under `[update]` in `ronfix.ini`.
 - **Connection checks with other players:** in a lobby or match, RoN-Fix sends small test messages over Steam's
@@ -49,4 +49,4 @@ Only the RoN-Fix developer. Uploads are deleted after 180 days. Nothing is sold 
 
 ## Questions
 
-Open an issue at https://github.com/soul-builds/RoN-Fix-Releases/issues
+Open an issue at https://github.com/soul-builds/RoN-Fix/issues

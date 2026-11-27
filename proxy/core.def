@@ -1,0 +1,3 @@
+LIBRARY ronfix-core.dll
+EXPORTS
+    get_netsys_object_ptr

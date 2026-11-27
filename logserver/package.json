@@ -1,0 +1,1 @@
+{"name":"ronfix-logs","private":true,"type":"module","scripts":{"test":"node --test test/worker.test.mjs"},"devDependencies":{"wrangler":"4.168.0"}}

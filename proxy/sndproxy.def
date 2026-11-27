@@ -1,0 +1,4 @@
+LIBRARY dssl.dll
+EXPORTS
+    delete_soundsys_object_ptr = dssl_orig.delete_soundsys_object_ptr @1
+    get_soundsys_object_ptr @2

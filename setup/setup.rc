@@ -1,0 +1,9 @@
+// RoN-Fix setup resources. Paths are relative to this folder; tools/build-setup.ps1 builds the files first.
+#include <windows.h>
+1 RT_MANIFEST "setup.manifest"
+101 RCDATA "../proxy/build/CrossplayNetLib.dll"
+102 RCDATA "../proxy/build/ronfix-core.dll"
+103 RCDATA "../proxy/build/ronfix-update.dll"
+104 RCDATA "../proxy/build/dssl.dll"
+105 RCDATA "../release/ronfix.ini"
+#include "verinfo.rc" /* version information, written by tools/build-setup.ps1 */

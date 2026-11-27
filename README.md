@@ -89,3 +89,21 @@ starting, so 0.13 removes it. If you ticked it in 0.12, open **RoN-Fix** from th
 The setup asks once whether to send RoN-Fix's own logs to help fix lag, disconnects and crashes.
 Player names and IDs are replaced with codes before anything is stored. Details:
 [PRIVACY.md](PRIVACY.md). You can change your answer any time in RoN-Fix (Start menu).
+
+## Source code
+
+RoN-Fix's own code is open source under the MIT licence:
+[soul-builds/RoN-Fix-Source](https://github.com/soul-builds/RoN-Fix-Source). Releases are built from it on GitHub,
+and anyone can rebuild them and get byte-identical files.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [soul-builds](https://github.com/soul-builds)
+- Approvers: [soul-builds](https://github.com/soul-builds)
+- Privacy policy: [PRIVACY.md](PRIVACY.md)
+
+Status: applying to SignPath Foundation (November 2026). Releases up to 0.13 are not code-signed; signing starts
+with the first release after the project is accepted.

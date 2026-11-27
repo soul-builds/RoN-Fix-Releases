@@ -30,6 +30,19 @@ log service on Cloudflare. **Before anything is stored**, the service replaces e
 Steam or PlayFab ID with a code such as `P-3fa91c07d2`. The same player always gets the same code, so a
 problem can be followed across games, but the name or ID cannot be read back from the code.
 
+## Other network traffic
+
+RoN-Fix also does two things that send no logs and no personal data:
+
+- **Update checks:** about 20 seconds after the game starts, RoN-Fix downloads its update list from GitHub
+  (github.com/soul-builds/RoN-Fix-Releases), and new files from there when there is a new version. GitHub sees
+  your IP address, as with any download. To switch this off, untick "Keep RoN-Fix up to date" when you install, or
+  set `Enabled=0` under `[update]` in `ronfix.ini`.
+- **Connection checks with other players:** in a lobby or match, RoN-Fix sends small test messages over Steam's
+  network to the other players in the same game who also run RoN-Fix. The messages contain RoN-Fix's version
+  number, counters and timings, and which player the game is waiting for. They measure whether Steam's network
+  would carry the game better. To switch this off, set `Shadow=0` under `[steam]` in `ronfix.ini`.
+
 ## Who sees it, and for how long
 
 Only the RoN-Fix developer. Uploads are deleted after 180 days. Nothing is sold or shared.

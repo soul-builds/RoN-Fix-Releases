@@ -69,14 +69,13 @@ is. That is how long a click takes to become an order. RoN-Fix can lower that to
   delay stays, so you can still play with anyone.
 - Slow connections still get longer turns, as before.
 
-## Better graphics (optional)
+## Better graphics: please leave it off
 
-Tick **Better graphics** in the setup for smoother edges, a sharper picture and more colour, made with
-[ReShade](https://reshade.me) (by crosire, BSD licence) and the SweetFX shaders (by CeeJay.dk, MIT licence).
-Both are downloaded from their official sources during install and checked before use. Pick **Subtle** or
-**Strong**; in the game, **Shift+F11** = Subtle, **Shift+F10** = Strong, **Shift+F12** = off, **Home** = ReShade's
-menu. It only changes how the game looks on your screen, so you can still play with anyone. Untick it (or use
-*Restore original game*) to remove it.
+The 0.12 setup has a **Better graphics** option, made with [ReShade](https://reshade.me) (by crosire) and the
+SweetFX shaders (by CeeJay.dk). Please leave it **unticked**. With Steam's in-game overlay switched on, which is
+how most people play, it can stop the game from starting. The next version of RoN-Fix removes the option.
+
+Already ticked it? Open **RoN-Fix** from the Start menu, untick **Better graphics** and press **Reinstall**.
 
 ## Logs (optional)
 

@@ -46,6 +46,19 @@ as the original. If it still won't start, use Steam's *Verify integrity of game 
 - Made for the current Steam build. If Steam updates the game to a build RoN-Fix doesn't know,
   RoN-Fix switches itself off and the game runs as normal.
 
+## Lobby tools (when you host)
+
+Only the host needs RoN-Fix for these; everyone else simply sees the player leave.
+
+- **Boot Player really removes the player.** The game's own boot only emptied the slot and could leave a
+  "ghost" behind. Now the booted player leaves the lobby for everyone and can't rejoin that lobby.
+- **Shift + Boot Player bans.** The player is added to `ronfix-bans.txt` in the game folder and is removed
+  whenever they join one of your lobbies again. You can also add PlayFab IDs or Steam IDs (64-bit numbers)
+  to that file by hand, one per line.
+- **Ready-click spam:** a player who toggles ready 12 times within 5 seconds is removed.
+
+These can be switched off under `[lobby]` in `ronfix.ini`.
+
 ## Better graphics (optional)
 
 Tick **Better graphics** in the setup for smoother edges, a sharper picture and more colour, made with

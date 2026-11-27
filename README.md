@@ -59,6 +59,16 @@ Only the host needs RoN-Fix for these; everyone else simply sees the player leav
 
 These can be switched off under `[lobby]` in `ronfix.ini`.
 
+## Shorter command delay (test, when you host)
+
+The game never makes a turn shorter than 400 ms, or 600 ms with 8 players, however fast everyone's connection
+is. That is how long a click takes to become an order. RoN-Fix can lower that to 200-300 ms:
+
+- The host adds `ShortDelay=1` under `[netfix]` in `ronfix.ini` (in the game folder).
+- It is only used when **every** player in the lobby has RoN-Fix 0.11 or later. Otherwise the game's own
+  delay stays, so you can still play with anyone.
+- Slow connections still get longer turns, as before.
+
 ## Better graphics (optional)
 
 Tick **Better graphics** in the setup for smoother edges, a sharper picture and more colour, made with

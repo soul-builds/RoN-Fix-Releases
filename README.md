@@ -46,6 +46,15 @@ as the original. If it still won't start, use Steam's *Verify integrity of game 
 - Made for the current Steam build. If Steam updates the game to a build RoN-Fix doesn't know,
   RoN-Fix switches itself off and the game runs as normal.
 
+## Better graphics (optional)
+
+Tick **Better graphics** in the setup for smoother edges, a sharper picture and more colour, made with
+[ReShade](https://reshade.me) (by crosire, BSD licence) and the SweetFX shaders (by CeeJay.dk, MIT licence).
+Both are downloaded from their official sources during install and checked before use. Pick **Subtle** or
+**Strong**; in the game, **Shift+F11** = Subtle, **Shift+F10** = Strong, **Shift+F12** = off, **Home** = ReShade's
+menu. It only changes how the game looks on your screen, so you can still play with anyone. Untick it (or use
+*Restore original game*) to remove it.
+
 ## Logs (optional)
 
 The setup asks once whether to send RoN-Fix's own logs to help fix lag, disconnects and crashes.

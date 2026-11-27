@@ -14,7 +14,9 @@ with or endorsed by Microsoft or the game's developers.
 New versions download by themselves while you play and are used from the next start.
 
 If Windows says the app was **blocked** and offers no "Run anyway", your PC has *Smart App Control*
-switched on, and RoN-Fix can't be installed on it for now.
+switched on, and RoN-Fix can't be installed on it for now. Smart App Control decides anew for every version:
+if it refuses a new version's files, RoN-Fix stays on the version you have, and Windows may show a "blocked"
+notice a few seconds after the game starts. Nothing breaks; the notice is harmless.
 
 ## Back to the original game
 
@@ -55,7 +57,13 @@ Only the host needs RoN-Fix for these; everyone else simply sees the player leav
 - **Shift + Boot Player bans.** The player is added to `ronfix-bans.txt` in the game folder and is removed
   whenever they join one of your lobbies again. You can also add PlayFab IDs or Steam IDs (64-bit numbers)
   to that file by hand, one per line.
+- **Unban:** open **RoN-Fix** from the Start menu and press **Unban...**, pick the player and press **Unban**.
+  It works within a few seconds, also while the game runs. Someone you removed from the room that is open
+  right now can join again from your next room.
 - **Ready-click spam:** a player who toggles ready 12 times within 5 seconds is removed.
+- **Ghost rooms:** sometimes the game's **Create** gives up and drops you back in the Game Browser while your
+  new room stays listed with you as host, so you can't host again. RoN-Fix leaves that ghost room for you a
+  few seconds later; just press Create again.
 
 These can be switched off under `[lobby]` in `ronfix.ini`.
 
@@ -69,13 +77,12 @@ is. That is how long a click takes to become an order. RoN-Fix can lower that to
   delay stays, so you can still play with anyone.
 - Slow connections still get longer turns, as before.
 
-## Better graphics: please leave it off
+## Better graphics (removed in 0.13)
 
-The 0.12 setup has a **Better graphics** option, made with [ReShade](https://reshade.me) (by crosire) and the
-SweetFX shaders (by CeeJay.dk). Please leave it **unticked**. With Steam's in-game overlay switched on, which is
-how most people play, it can stop the game from starting. The next version of RoN-Fix removes the option.
-
-Already ticked it? Open **RoN-Fix** from the Start menu, untick **Better graphics** and press **Reinstall**.
+RoN-Fix 0.12's setup had a **Better graphics** option, made with [ReShade](https://reshade.me) (by crosire) and
+the SweetFX shaders (by CeeJay.dk). With Steam's in-game overlay switched on it could stop the game from
+starting, so 0.13 removes it. If you ticked it in 0.12, open **RoN-Fix** from the Start menu and press
+**Reinstall** once: that takes it out. Automatic updates don't.
 
 ## Logs (optional)
 

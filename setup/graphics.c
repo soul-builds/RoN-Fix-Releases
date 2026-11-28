@@ -7,21 +7,11 @@
  * What is left: removing what 0.12 installed, on every install and on "Restore original game". Only files 0.12
  * listed itself as owning (ronfix\graphics.txt exists): dxgi.dll only when it is byte for byte ReShade 6.8.0's
  * ReShade32.dll, the 8 shader files, the 2 presets, ReShade.ini / ReShade.log, and the shader folders when empty.
- * A dxgi.dll that is not ours (the player's own ReShade or another add-on) is never touched. */
+ * A dxgi.dll that is not ours (the player's own ReShade or another add-on) is never touched.
+ * The file list and the hash are in proxy/graphics012.h: the updater (proxy/update.c) removes the same files for
+ * players who only ever update, and never run this setup again. */
 
-#define RESHADE32_SHA "538998f66c0197adcdeadfe8e5ea19dd6ca3253e40399476d291f385ce518b88"
-
-static const WCHAR *const gfx_files[] = {
-	L"reshade-shaders\\Shaders\\SweetFX\\SMAA.fx",     L"reshade-shaders\\Shaders\\SweetFX\\SMAA.fxh",
-	L"reshade-shaders\\Shaders\\SweetFX\\CAS.fx",      L"reshade-shaders\\Shaders\\SweetFX\\Vibrance.fx",
-	L"reshade-shaders\\Shaders\\SweetFX\\Curves.fx",   L"reshade-shaders\\Shaders\\SweetFX\\Levels.fx",
-	L"reshade-shaders\\Shaders\\ReShade.fxh",          L"reshade-shaders\\Shaders\\ReShadeUI.fxh",
-	L"ronfix-graphics-subtle.ini",                     L"ronfix-graphics-strong.ini",
-	L"ReShade.ini",                                    L"ReShade.log",
-	L"ReShade.log1",
-};
-#define GFX_N (int)(sizeof gfx_files / sizeof gfx_files[0])
-static const WCHAR *const gfx_dirs[] = { L"reshade-shaders", L"reshade-shaders\\Shaders", L"reshade-shaders\\Shaders\\SweetFX" };
+#include "../proxy/graphics012.h"
 
 static int sha256_hex(const WCHAR *p, char out[65])
 {
@@ -61,15 +51,17 @@ static int file_is_sha(const WCHAR *p, const char *sha)
 static int graphics_remove(const WCHAR *dir)
 {
 	WCHAR p[MAX_PATH], list[MAX_PATH];
-	if (!path(list, dir, L"ronfix\\graphics.txt") || !exists(list))
+	if (!path(list, dir, GFX_MARKER) || !exists(list))
 		return 0;
-	path(p, dir, L"dxgi.dll"); /* first: it is the file that switches ReShade on */
+	path(p, dir, GFX_DLL); /* first: it is the file that switches ReShade on */
 	if (file_is_sha(p, RESHADE32_SHA))
+		DeleteFileW(p);
+	if (path(p, dir, GFX_ASIDE)) /* the updater moved it here if the game had it loaded at the time */
 		DeleteFileW(p);
 	for (int k = 0; k < GFX_N; k++)
 		if (path(p, dir, gfx_files[k]))
 			DeleteFileW(p);
-	for (int k = 2; k >= 0; k--) /* only if empty: never anything the player added */
+	for (int k = GFX_NDIRS - 1; k >= 0; k--) /* only if empty: never anything the player added */
 		if (path(p, dir, gfx_dirs[k]))
 			RemoveDirectoryW(p);
 	DeleteFileW(list);

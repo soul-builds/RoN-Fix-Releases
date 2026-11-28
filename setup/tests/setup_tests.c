@@ -56,6 +56,19 @@ __declspec(dllexport) int __stdcall setup_test_bans_unban(const WCHAR *dir, int 
 	return bans_unban(dir, ids, n);
 }
 
+/* the Start menu entry, in a scratch folder in place of the Start menu's Programs folder. app_start 0: what an
+ * install does with `target` (the installed app); 1: what the window does when `target` is the file that was started */
+__declspec(dllexport) void __stdcall setup_test_shortcut(const WCHAR *progs, const WCHAR *target, int app_start)
+{
+	HRESULT co = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	if (app_start)
+		shortcut_rename_in(progs, target);
+	else
+		shortcut_in(progs, target);
+	if (SUCCEEDED(co))
+		CoUninitialize();
+}
+
 /* 1: the next installs behave as if Windows (Smart App Control) refused the loader */
 __declspec(dllexport) void __stdcall setup_test_refuse_loader(int on) { test_refuse_loader = on; }
 

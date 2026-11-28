@@ -27,7 +27,7 @@ if (-not $env:GH_TOKEN) { throw 'no gh login for soul-builds' }
 try {
 	$who = (& gh api user --jq .login)
 	if ($who -ne 'soul-builds') { throw "gh token belongs to '$who', not soul-builds" }
-	& gh release create "v$Name" -R $repo --title "RoN-Fix $Name" --notes-file $Notes --latest @assets
+	& gh release create "v$Name" -R $repo --title "Accord $Name" --notes-file $Notes --latest @assets
 	if ($LASTEXITCODE) { throw 'gh release create failed' }
 	# (no spaces or quotes in --jq: Windows PowerShell 5.1 mangles them for native programs)
 	& gh release view "v$Name" -R $repo --json url --jq .url

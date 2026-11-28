@@ -7,8 +7,9 @@
 #define TD_OFF_MAX (TD_VA_MAX - TD_VA_PING)
 static unsigned char td_buf[TD_OFF_MAX + 0x10];
 
-/* the fake lobby: members with their ronfix_turn value (0 = never posted it), and the owner */
-struct td_fake_member { const char *id, *val; };
+/* the fake lobby: members with their ronfix_turn value (0 = never posted it) and, for lobbytag_tests.c, their
+ * ronfix_ver value, and the owner */
+struct td_fake_member { const char *id, *val, *ver; };
 static struct td_fake_member td_lob[4];
 static unsigned td_nlob;
 static struct pf_key td_keys[4], td_owner_key;
@@ -32,7 +33,7 @@ static long __stdcall td_fake_member_prop(void *lobby, const void *member, const
 	const char *id = ((const struct pf_key *)member)->id;
 	for (unsigned i = 0; i < td_nlob; i++)
 		if (!lstrcmpA(id, td_lob[i].id)) {
-			*v = !lstrcmpA(key, "ronfix_turn") ? td_lob[i].val : 0;
+			*v = !lstrcmpA(key, "ronfix_turn") ? td_lob[i].val : !lstrcmpA(key, "ronfix_ver") ? td_lob[i].ver : 0;
 			return 0;
 		}
 	return (long)0x80070057; /* not a member */

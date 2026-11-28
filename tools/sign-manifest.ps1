@@ -8,7 +8,7 @@
   powershell -ExecutionPolicy Bypass -File tools\sign-manifest.ps1 manifest.txt -KeyFile C:\path\test.key
 .NOTES
   The private keys live in %USERPROFILE%\.ronfix-keys (never in a repo). Lose both and installed copies can
-  only be moved to a new key by running a new RoN-Fix-Setup.exe.
+  only be moved to a new key by running a new Accord-Setup.exe.
 #>
 param([Parameter(Mandatory)][string]$Manifest, [ValidateSet('primary', 'backup')][string]$Key = 'primary', [string]$KeyFile)
 $ErrorActionPreference = 'Stop'

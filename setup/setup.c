@@ -1,5 +1,9 @@
 /* RoN-Fix setup: one file, double-click, Install (setup v1, 2026-11-26).
  *
+ * Naming: players read "Accord" (the name since 0.16; "RoN-Fix" up to 0.15). Everything on disk keeps its name:
+ * ronfix.ini, ronfix-*.dll, the ronfix folder and this app's installed copy, ronfix\RoN-Fix.exe. Only the Start menu
+ * entry is renamed (shortcut_in). Texts that name a release up to 0.15 still call it RoN-Fix.
+ *
  * Carries every RoN-Fix file as a resource (setup.rc). Finds the game through Steam, checks that the game files
  * are the builds RoN-Fix was written for, keeps the originals (CrossplayNetLib_orig.dll, dssl_orig.dll) and puts
  * RoN-Fix's files in. "Restore original game" puts the originals back. Copies itself to <game>\ronfix\RoN-Fix.exe
@@ -7,10 +11,10 @@
  * current too. The same window lists the players banned from rooms this player hosts and unbans them (bans.c).
  *
  * Command line (used by the tests, and by the elevated copy when the game folder needs admin rights):
- *   RoN-Fix-Setup.exe --install "<game folder>" [--no-updates] [--logs yes|no] [--no-shortcut] [--quiet]
- *                     [--result <file>]
+ *   Accord-Setup.exe --install "<game folder>" [--no-updates] [--logs yes|no] [--no-shortcut] [--quiet]
+ *                    [--result <file>]
  *   (--graphics <anything> is still accepted and ignored: 0.13 dropped better graphics, every install removes 0.12's)
- *   RoN-Fix-Setup.exe --restore "<game folder>" [--quiet] [--result <file>]
+ *   Accord-Setup.exe --restore "<game folder>" [--quiet] [--result <file>]
  * Exit code 0 = done, 1 = refused (message says why), 2 = needs admin rights, 3 = bad arguments. */
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
@@ -47,6 +51,7 @@
 #define SND_SIZE 0x121000u
 
 enum { R_LOADER = 101, R_CORE, R_UPDATE, R_INI = 105 }; /* 104 was the dssl.dll stand-in, until 0.14 */
+#define LAST_RONFIX_RELEASE 15 /* releases up to 0.15 were called RoN-Fix, later ones Accord */
 
 static WCHAR msg[2048]; /* result of the last action, shown to the player */
 static int no_shortcut;  /* --no-shortcut (tests): no Start menu entry */
@@ -381,26 +386,51 @@ static void merge_ini(const WCHAR *ini)
 	}
 }
 
-static void shortcut(const WCHAR *target)
+/* The Start menu entry "Accord", in progs (the Start menu's Programs folder). Up to 0.15 the entry was "RoN-Fix": that
+ * one is renamed (or deleted, if both are there), so there is never a second entry. */
+static void shortcut_in(const WCHAR *progs, const WCHAR *target)
 {
-	PWSTR progs = NULL;
-	WCHAR lnk[MAX_PATH];
+	WCHAR lnk[MAX_PATH], old[MAX_PATH];
 	IShellLinkW *sl = NULL;
 	IPersistFile *pf = NULL;
-	if (FAILED(SHGetKnownFolderPath(&FOLDERID_Programs, 0, NULL, &progs)))
+	if (!path(lnk, progs, L"Accord.lnk") || !path(old, progs, L"RoN-Fix.lnk"))
 		return;
-	_snwprintf(lnk, MAX_PATH, L"%ls\\RoN-Fix.lnk", progs);
-	lnk[MAX_PATH - 1] = 0;
-	CoTaskMemFree(progs);
+	if (exists(old) && (exists(lnk) || !MoveFileExW(old, lnk, 0)))
+		DeleteFileW(old);
 	if (SUCCEEDED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&sl))) {
 		IShellLinkW_SetPath(sl, target);
-		IShellLinkW_SetDescription(sl, L"RoN-Fix: install, update or restore the original Rise of Nations");
+		IShellLinkW_SetDescription(sl, L"Accord: install, update or restore the original Rise of Nations");
 		if (SUCCEEDED(IShellLinkW_QueryInterface(sl, &IID_IPersistFile, (void **)&pf))) {
 			IPersistFile_Save(pf, lnk, TRUE);
 			IPersistFile_Release(pf);
 		}
 		IShellLinkW_Release(sl);
 	}
+}
+
+/* When the installed app (ronfix\RoN-Fix.exe) starts: an update from 0.15 or older replaced the app's file but left
+ * the Start menu entry under its old name, so it is renamed now. A setup that was only downloaded and opened leaves
+ * the entry alone until Install is pressed: the entry may still lead to an older app. */
+static void shortcut_rename_in(const WCHAR *progs, const WCHAR *self)
+{
+	static const WCHAR tail[] = L"\\ronfix\\RoN-Fix.exe";
+	WCHAR old[MAX_PATH];
+	int n = lstrlenW(self), t = lstrlenW(tail);
+	if (n > t && !_wcsicmp(self + n - t, tail) && path(old, progs, L"RoN-Fix.lnk") && exists(old))
+		shortcut_in(progs, self);
+}
+
+/* app_start 0: after an install, the entry is written; 1: the window opens, an entry under the old name is renamed */
+static void shortcut(const WCHAR *target, int app_start)
+{
+	PWSTR progs = NULL;
+	if (FAILED(SHGetKnownFolderPath(&FOLDERID_Programs, 0, NULL, &progs)))
+		return;
+	if (app_start)
+		shortcut_rename_in(progs, target);
+	else
+		shortcut_in(progs, target);
+	CoTaskMemFree(progs);
 }
 
 /* ------------------------------------------------------------------ the two actions. 0 ok, 1 refused, 2 admin */
@@ -415,15 +445,15 @@ static int fail_io(const WCHAR *what)
 
 /* The privacy notice, shown before the player decides (PRIVACY.md has the full text). */
 static const WCHAR logs_short[] =
-	L"RoN-Fix can send its own log files to its developer, to find and fix lag, disconnects and crashes.";
+	L"Accord can send its own log files to its developer, to find and fix lag, disconnects and crashes.";
 static const WCHAR logs_details[] =
-	L"What is sent, at each game start: the new parts of RoN-Fix's own logs (lobby joins and leaves, ready clicks, "
-	L"match timing such as ping and lag per player, loading times, problems RoN-Fix caught, update results), "
-	L"RoN-Fix's version and a random install code.\n\n"
-	L"Not sent: your files, saved games, chat, passwords, or anything outside RoN-Fix's logs.\n\n"
+	L"What is sent, at each game start: the new parts of Accord's own logs (lobby joins and leaves, ready clicks, "
+	L"match timing such as ping and lag per player, loading times, problems Accord caught, update results), "
+	L"Accord's version and a random install code.\n\n"
+	L"Not sent: your files, saved games, chat, passwords, or anything outside Accord's logs.\n\n"
 	L"Player names and Steam/PlayFab IDs (yours and other players') are replaced with codes before anything is "
-	L"stored; your Windows user name never leaves your PC. Only the RoN-Fix developer sees the logs; they are "
-	L"deleted after 180 days.\n\nYou can change this any time: open RoN-Fix from the Start menu.";
+	L"stored; your Windows user name never leaves your PC. Only the Accord developer sees the logs; they are "
+	L"deleted after 180 days.\n\nYou can change this any time: open Accord from the Start menu.";
 
 static int consent_known(const WCHAR *dir)
 {
@@ -454,16 +484,16 @@ static int sac_state(void)
 }
 
 static const WCHAR sac_text[] = L"Smart App Control is a Windows protection that blocks programs Microsoft does not know yet. It has no "
-	L"exceptions for single programs. RoN-Fix is not code-signed yet, so Windows may refuse a new RoN-Fix version on "
-	L"this PC. When it does, RoN-Fix steps aside: the game runs as normal without the fixes, and RoN-Fix tries that "
+	L"exceptions for single programs. Accord is not code-signed yet, so Windows may refuse a new Accord version on "
+	L"this PC. When it does, Accord steps aside: the game runs as normal without the fixes, and Accord tries that "
 	L"version again a week later.\n\n"
 	L"You can:\n"
-	L"\x2022  Wait. RoN-Fix has applied for free code signing, and Windows allows signed programs.\n"
+	L"\x2022  Wait. Accord has applied for free code signing, and Windows allows signed programs.\n"
 	L"\x2022  Switch Smart App Control off yourself: Windows Security > App & browser control > Smart App Control "
-	L"settings. That turns the protection off for every program, not only RoN-Fix (Microsoft Defender keeps running). "
+	L"settings. That turns the protection off for every program, not only Accord (Microsoft Defender keeps running). "
 	L"With Windows 11's April 2026 update or later you can switch it back on there; on older versions only by "
 	L"reinstalling Windows.\n\n"
-	L"RoN-Fix never changes this setting itself.";
+	L"Accord never changes this setting itself.";
 
 #ifdef SETUP_TEST
 static int test_refuse_loader;
@@ -528,8 +558,8 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 		say(L"There is no Rise of Nations in that folder. Use \"Change...\" to pick the folder that has riseofnations.exe.");
 		return 1;
 	case S_WRONG_BUILD:
-		say(L"This Rise of Nations is a different version from the one RoN-Fix %ls was made for, so nothing was "
-		    L"changed. Steam may have updated the game: a new RoN-Fix will follow.", RONFIX_NAME);
+		say(L"This Rise of Nations is a different version from the one Accord %ls was made for, so nothing was "
+		    L"changed. Steam may have updated the game: a new version of Accord will follow.", RONFIX_NAME);
 		return 1;
 	default:
 		break;
@@ -542,7 +572,7 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 	else if (is_build(o, NET_STAMP, NET_SIZE))
 		move_orig = 0; /* RoN-Fix is in already, original kept */
 	else {
-		say(L"CrossplayNetLib.dll is not the version RoN-Fix was made for, so nothing was changed. In Steam: right-click "
+		say(L"CrossplayNetLib.dll is not the version Accord was made for, so nothing was changed. In Steam: right-click "
 		    L"Rise of Nations > Properties > Installed Files > Verify integrity of game files, then try again.");
 		return 1;
 	}
@@ -558,12 +588,12 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 		path(p, dir, L"CrossplayNetLib.dll");
 		path(chk, dir, L"ronfix\\loader-check.dll");
 		if (!d || !n)
-			return fail_io(L"read RoN-Fix's files from this setup");
+			return fail_io(L"read Accord's files from this setup");
 		if (!file_equals(p, d, n)) {
 			int refused = write_all(chk, d, n) && image_refused(chk);
 			DeleteFileW(chk);
 			if (refused) {
-				say(L"Windows' Smart App Control refused RoN-Fix's files on this PC, so nothing was installed: the game "
+				say(L"Windows' Smart App Control refused Accord's files on this PC, so nothing was installed: the game "
 				    L"would not have started. Press the \"Smart App Control...\" button to see what you can do.");
 				return 1;
 			}
@@ -573,7 +603,7 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 	 *    original straight back if that fails, so the game is never left without a file it needs. The loader goes
 	 *    last: it is the file that switches RoN-Fix on. */
 	if (!put_res(dir, L"ronfix-core.dll", R_CORE) || !put_res(dir, L"ronfix-update.dll", R_UPDATE))
-		return fail_io(L"copy RoN-Fix's files into the game folder");
+		return fail_io(L"copy Accord's files into the game folder");
 	path(p, dir, L"CrossplayNetLib.dll");
 	path(o, dir, L"CrossplayNetLib_orig.dll");
 	if (move_orig && !MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING))
@@ -583,7 +613,7 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 		if (move_orig)
 			MoveFileExW(o, p, MOVEFILE_REPLACE_EXISTING);
 		SetLastError(e);
-		return fail_io(L"copy RoN-Fix's files into the game folder");
+		return fail_io(L"copy Accord's files into the game folder");
 	}
 	/* the quit-crash fix needs no stand-in dssl.dll any more (since 0.15): the game's own goes back */
 	sound_restore(dir);
@@ -605,7 +635,7 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 	if (_wcsicmp(selfpath, copy_to) && !files_equal(selfpath, copy_to))
 		CopyFileW(selfpath, copy_to, FALSE);
 	if (!no_shortcut)
-		shortcut(copy_to);
+		shortcut(copy_to, 0);
 	path(p, dir, L"ronfix\\version.txt");
 	char v[64];
 	int vn = _snprintf(v, sizeof v, "%d %ls\r\n", RONFIX_RELEASE, RONFIX_NAME);
@@ -614,7 +644,7 @@ static int do_install(const WCHAR *dir, int updates, int logs)
 	/* 6. 0.12's better graphics (ReShade) is taken out: with the Steam overlay on it could stop the game at start */
 	const WCHAR *gfx_note = graphics_remove(dir) ? L"\n\nBetter graphics (ReShade) from RoN-Fix 0.12 was removed: with Steam's "
 	                                               L"overlay on it could stop the game from starting." : L"";
-	say(L"RoN-Fix %ls is installed. Start Rise of Nations from Steam as usual.%ls%ls%ls", RONFIX_NAME,
+	say(L"Accord %ls is installed. Start Rise of Nations from Steam as usual.%ls%ls%ls", RONFIX_NAME,
 	    updates ? L" New versions download by themselves while you play and are used from the next start." : L" Automatic updates are off.",
 	    laa ? L"" : L"\n\n(The 4 GB memory setting could not be applied; everything else is in.)", gfx_note);
 	return 0;
@@ -653,7 +683,7 @@ static int do_restore(const WCHAR *dir)
 	int pack = GetPrivateProfileIntW(L"gamefix", L"Version", 0, p);
 	if (exists(p))
 		WritePrivateProfileStringW(L"gamefix", L"Version", L"0", p);
-	say(L"The original game is back: Rise of Nations runs exactly as Steam installed it.%ls%ls\n\nRoN-Fix stays in the "
+	say(L"The original game is back: Rise of Nations runs exactly as Steam installed it.%ls%ls\n\nAccord stays in the "
 	    L"Start menu if you want it again.",
 	    laa ? L"" : L"\n\n(The 4 GB memory setting could not be undone; Steam's \"Verify integrity of game files\" does it.)",
 	    pack > 0 ? L"\n\nThe gameplay pack from the old zip version changed game data files: use Steam's \"Verify "
@@ -718,7 +748,7 @@ static int ask_logs(HWND w)
 	int pressed = 0;
 	c.hwndParent = w;
 	c.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA;
-	c.pszWindowTitle = L"RoN-Fix";
+	c.pszWindowTitle = L"Accord";
 	c.pszMainInstruction = L"Help fix Rise of Nations?";
 	c.pszContent = logs_short;
 	c.pszExpandedInformation = logs_details;
@@ -763,21 +793,22 @@ static void refresh(void)
 		lstrcpyW(t, L"Rise of Nations was not found. Press \"Change...\" and pick the game's folder.");
 		break;
 	case S_WRONG_BUILD:
-		_snwprintf(t, 512, L"This is a different version of Rise of Nations from the one RoN-Fix %ls was made for.", RONFIX_NAME);
+		_snwprintf(t, 512, L"This is a different version of Rise of Nations from the one Accord %ls was made for.", RONFIX_NAME);
 		break;
 	case S_ORIGINAL:
-		lstrcpyW(t, L"Status: original game, RoN-Fix is not installed.");
+		lstrcpyW(t, L"Status: original game, Accord is not installed.");
 		break;
 	case S_INSTALLED:
 		if (rel > RONFIX_RELEASE)
-			_snwprintf(t, 512, L"Status: RoN-Fix %ls is installed (newer than this setup, %ls).", name, RONFIX_NAME);
+			_snwprintf(t, 512, L"Status: Accord %ls is installed (newer than this setup, %ls).", name, RONFIX_NAME);
 		else if (rel == RONFIX_RELEASE)
-			_snwprintf(t, 512, L"Status: RoN-Fix %ls is installed.", RONFIX_NAME);
+			_snwprintf(t, 512, L"Status: Accord %ls is installed.", RONFIX_NAME);
 		else
-			_snwprintf(t, 512, L"Status: RoN-Fix %ls is installed; Install updates it to %ls.", name[0] ? name : L"(older)", RONFIX_NAME);
+			_snwprintf(t, 512, L"Status: %ls %ls is installed; Install updates it to Accord %ls.",
+			           rel > LAST_RONFIX_RELEASE ? L"Accord" : L"RoN-Fix", name[0] ? name : L"(older)", RONFIX_NAME);
 		break;
 	case S_OLD_RONFIX:
-		_snwprintf(t, 512, L"Status: an older RoN-Fix (zip version) is installed; Install updates it to %ls.", RONFIX_NAME);
+		_snwprintf(t, 512, L"Status: an older RoN-Fix (zip version) is installed; Install updates it to Accord %ls.", RONFIX_NAME);
 		break;
 	}
 	t[511] = 0;
@@ -885,13 +916,13 @@ static void ban_unban_selected(HWND d)
 	else
 		_snwprintf(q, 200, L"Unban these %d players? They can join the rooms you host again.", picked);
 	q[199] = 0;
-	if (MessageBoxW(d, q, L"RoN-Fix", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+	if (MessageBoxW(d, q, L"Accord", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
 		return;
 	int r = bans_unban(gamedir, ids, nids);
 	if (r)
 		MessageBoxW(d, r == 1 ? L"ronfix-bans.txt (in the game folder) is too big for this window: edit it in Notepad."
-		                      : L"Windows did not let RoN-Fix change ronfix-bans.txt in the game folder. Nobody was unbanned.",
-		            L"RoN-Fix", MB_OK | MB_ICONWARNING);
+		                      : L"Windows did not let Accord change ronfix-bans.txt in the game folder. Nobody was unbanned.",
+		            L"Accord", MB_OK | MB_ICONWARNING);
 	ban_fill();
 }
 
@@ -899,7 +930,7 @@ static INT_PTR CALLBACK bans_dlgproc(HWND d, UINT m, WPARAM wp, LPARAM lp)
 {
 	switch (m) {
 	case WM_INITDIALOG: {
-		SetWindowTextW(d, L"RoN-Fix: banned players");
+		SetWindowTextW(d, L"Accord: banned players");
 		RECT r = { 0, 0, S(480), S(344) }, o;
 		AdjustWindowRectEx(&r, (DWORD)GetWindowLongW(d, GWL_STYLE), FALSE, (DWORD)GetWindowLongW(d, GWL_EXSTYLE));
 		GetWindowRect(GetParent(d), &o);
@@ -963,10 +994,11 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 	switch (m) {
 	case WM_CREATE: {
 		WCHAR title[64];
-		_snwprintf(title, 64, L"RoN-Fix %ls", RONFIX_NAME);
+		_snwprintf(title, 64, L"Accord %ls", RONFIX_NAME);
 		ctl(w, L"STATIC", title, 0, 20, 16, 500, 26, 0, bold);
-		ctl(w, L"STATIC", L"Unofficial fixes for Rise of Nations: Extended Edition on Steam: the freeze at start-up, "
-		                  L"crashes, frozen players. You can still play with people who don't have it.",
+		ctl(w, L"STATIC", L"Accord, the unofficial patch for Rise of Nations: Extended Edition (formerly RoN-Fix). It fixes "
+		                  L"the freeze at start-up, crashes and frozen players. You can still play with people who don't "
+		                  L"have it.",
 		    0, 20, 46, 520, 36, 0, font);
 		ctl(w, L"STATIC", L"Game folder:", 0, 20, 92, 90, 20, 0, font);
 		h_dir = ctl(w, L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL | WS_BORDER, 20, 112, 420, 24, ID_DIR, font);
@@ -974,10 +1006,10 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 		h_status = ctl(w, L"STATIC", L"", 0, 20, 146, 380, 36, ID_STATUS, font);
 		/* only when Smart App Control is on: it can refuse unsigned RoN-Fix files */
 		h_sac = ctl(w, L"BUTTON", L"Smart App Control...", BS_PUSHBUTTON | WS_TABSTOP, 405, 146, 135, 26, ID_SAC, font);
-		h_updates = ctl(w, L"BUTTON", L"Keep RoN-Fix up to date automatically (recommended)", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 186,
+		h_updates = ctl(w, L"BUTTON", L"Keep Accord up to date automatically (recommended)", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 186,
 		                 520, 22, ID_UPDATES, font);
 		SendMessageW(h_updates, BM_SETCHECK, BST_CHECKED, 0);
-		h_logs = ctl(w, L"BUTTON", L"Send RoN-Fix's logs to help fix the game", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 212, 400, 22,
+		h_logs = ctl(w, L"BUTTON", L"Send Accord's logs to help fix the game", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 212, 400, 22,
 		             ID_LOGS, font);
 		ctl(w, L"BUTTON", L"What is sent?", BS_PUSHBUTTON | WS_TABSTOP, 430, 210, 110, 26, ID_LOGS_INFO, font);
 		h_install = ctl(w, L"BUTTON", L"Install", BS_DEFPUSHBUTTON | WS_TABSTOP | WS_GROUP, 20, 252, 150, 32, ID_INSTALL, font);
@@ -999,7 +1031,7 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 		case ID_INSTALL:
 		case ID_RESTORE: {
 			int restore = LOWORD(wp) == ID_RESTORE;
-			if (restore && MessageBoxW(w, L"Put the original game files back and switch RoN-Fix off?", L"RoN-Fix",
+			if (restore && MessageBoxW(w, L"Put the original game files back and switch Accord off?", L"Accord",
 			                           MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
 				return 0;
 			int logs = -1;
@@ -1013,21 +1045,21 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 			int r = run_action(w, restore, gamedir, SendMessageW(h_updates, BM_GETCHECK, 0, 0) == BST_CHECKED, logs);
 			SetCursor(old);
 			refresh();
-			MessageBoxW(w, msg, L"RoN-Fix", MB_OK | (r == 0 ? MB_ICONINFORMATION : MB_ICONWARNING));
+			MessageBoxW(w, msg, L"Accord", MB_OK | (r == 0 ? MB_ICONINFORMATION : MB_ICONWARNING));
 			return 0;
 		}
 		case ID_LOGS_INFO: {
 			static WCHAR t[2048];
 			_snwprintf(t, 2047, L"%ls\n\n%ls\n\nFull text: PRIVACY.md at github.com/soul-builds/RoN-Fix", logs_short, logs_details);
 			t[2047] = 0;
-			MessageBoxW(w, t, L"RoN-Fix: what is sent", MB_OK | MB_ICONINFORMATION);
+			MessageBoxW(w, t, L"Accord: what is sent", MB_OK | MB_ICONINFORMATION);
 			return 0;
 		}
 		case ID_BANS:
 			bans_window(w);
 			return 0;
 		case ID_SAC:
-			MessageBoxW(w, sac_text, L"RoN-Fix: Windows' Smart App Control is on", MB_OK | MB_ICONINFORMATION);
+			MessageBoxW(w, sac_text, L"Accord: Windows' Smart App Control is on", MB_OK | MB_ICONINFORMATION);
 			return 0;
 		case ID_CLOSE:
 			DestroyWindow(w);
@@ -1092,10 +1124,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 		}
 		int r = !wcscmp(argv[1], L"--restore") ? do_restore(argv[2]) : do_install(argv[2], updates, logs);
 		if (r == 2)
-			say(L"Windows did not allow RoN-Fix to change the game folder (access denied).");
+			say(L"Windows did not allow Accord to change the game folder (access denied).");
 		write_result(result);
 		if (!quiet)
-			MessageBoxW(NULL, msg, L"RoN-Fix", MB_OK | (r == 0 ? MB_ICONINFORMATION : MB_ICONWARNING));
+			MessageBoxW(NULL, msg, L"Accord", MB_OK | (r == 0 ? MB_ICONINFORMATION : MB_ICONWARNING));
 		return r;
 	}
 
@@ -1112,6 +1144,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 	ncm.lfMessageFont.lfHeight = MulDiv(ncm.lfMessageFont.lfHeight, 3, 2);
 	bold = CreateFontIndirectW(&ncm.lfMessageFont);
 	find_game(gamedir);
+	GetModuleFileNameW(NULL, selfpath, MAX_PATH);
+	shortcut(selfpath, 1); /* the installed app after an update from 0.15 or older: its Start menu entry gets the new name */
 
 	WNDCLASSW wc = { 0 };
 	wc.lpfnWndProc = wndproc;
@@ -1125,7 +1159,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show)
 	DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 	AdjustWindowRect(&r, style, FALSE);
 	WCHAR title[64];
-	_snwprintf(title, 64, L"RoN-Fix %ls setup", RONFIX_NAME);
+	_snwprintf(title, 64, L"Accord %ls setup", RONFIX_NAME);
 	HWND w = CreateWindowW(L"RoNFixSetup", title, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
 	                       NULL, NULL, inst, NULL);
 	ShowWindow(w, show);

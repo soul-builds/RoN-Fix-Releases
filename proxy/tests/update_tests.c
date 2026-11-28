@@ -121,11 +121,11 @@ static void test_manifest(void)
 	static struct manifest m;
 	lstrcpyA(t, "ronfix-manifest 1\r\nversion 7\r\nname 0.7\r\ngame 6674863f bb4000\r\nsomething new 1 2 3\r\n"
 	            "file ronfix-core.dll ronfix-core.dll 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff 50176\r\n"
-	            "file ronfix\\RoN-Fix.exe RoN-Fix-Setup.exe ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100 9\n");
+	            "file ronfix\\RoN-Fix.exe Accord-Setup.exe ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100 9\n");
 	int ok = parse_manifest(t, lstrlenA(t), &m);
 	check(ok && m.version == 7 && streq(m.name, "0.7") && m.ngame == 1 && m.game_stamp[0] == 0x6674863f &&
 	          m.game_size[0] == 0xbb4000 && m.nfiles == 2 && streq(m.f[1].target, "ronfix\\RoN-Fix.exe") &&
-	          streq(m.f[1].asset, "RoN-Fix-Setup.exe") && m.f[0].size == 50176 && m.f[0].sha[1] == 0x11 &&
+	          streq(m.f[1].asset, "Accord-Setup.exe") && m.f[0].size == 50176 && m.f[0].sha[1] == 0x11 &&
 	          m.f[1].sha[0] == 0xff,
 	      "manifest: version, name, game build, two files, unknown line ignored");
 	lstrcpyA(t, "ronfix-manifest 1\nversion 7\nfile riseofnations.exe x.exe 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff 5\n");
@@ -194,7 +194,7 @@ static void file_line(char *o, const char *target, const char *asset, const char
 
 static void test_update(void)
 {
-	static char m[4096], l1[200], l2[200], l3[200];
+	static char m[4096], l1[200], l2[200], l3[200], l4[200];
 	static WCHAR feedw[300], p[MAX_PATH], q[MAX_PATH], sysdll[MAX_PATH];
 	if (!GetEnvironmentVariableW(L"RONFIX_TEST_FEED", feedw, 300) || !GetEnvironmentVariableW(L"RONFIX_TEST_SERVE", serve, MAX_PATH) ||
 	    !GetEnvironmentVariableW(L"RONFIX_TEST_GAME", game, MAX_PATH)) {
@@ -227,8 +227,15 @@ static void test_update(void)
 	CreateDirectoryW(p, NULL);
 	wjoin(p, MAX_PATH, gdir, L"ronfix\\version.txt", 0);
 	write_file(p, "3 0.6\r\n", 7);
+	wjoin(p, MAX_PATH, gdir, L"ronfix\\RoN-Fix.exe", 0);
+	write_file(p, "old app", 7);
 
-	/* the feed: release 4 changes the loader and the core */
+	/* the feed: release 4 changes the loader, the core and the app. The app's download is called Accord-Setup.exe
+	 * since the product is called Accord (0.16); installed, it keeps the name ronfix\RoN-Fix.exe. The updater takes
+	 * both names from the manifest, and this code is unchanged since updater v2 (0.15), which has to install it. */
+	wjoin(p, MAX_PATH, serve, L"Accord-Setup.exe", 0);
+	write_file(p, "new app 4", 9);
+	file_line(l4, "ronfix\\RoN-Fix.exe", "Accord-Setup.exe", "new app 4");
 	wjoin(p, MAX_PATH, serve, L"CrossplayNetLib.dll", 0);
 	write_file(p, "new loader 4", 12);
 	wjoin(p, MAX_PATH, serve, L"ronfix-core.dll", 0);
@@ -238,7 +245,7 @@ static void test_update(void)
 	file_line(l1, "CrossplayNetLib.dll", "CrossplayNetLib.dll", "new loader 4");
 	file_line(l2, "ronfix-core.dll", "ronfix-core.dll", "new core 4");
 	file_line(l3, "dssl.dll", "dssl.dll", "sound v1");
-	wsprintfA(m, "ronfix-manifest 1\nversion 4\nname 0.7-test\n%s%s%s", l1, l2, l3);
+	wsprintfA(m, "ronfix-manifest 1\nversion 4\nname 0.7-test\n%s%s%s%s", l1, l2, l3, l4);
 
 	/* bad signature first: nothing may change */
 	publish(m, 0);
@@ -257,6 +264,8 @@ static void test_update(void)
 	      "update: the old files moved to ronfix\\previous, including a core that was loaded at the time");
 	check(file_is(gdir, L"dssl.dll", "sound v1") && !file_is(gdir, L"ronfix\\previous\\dssl.dll", "sound v1"),
 	      "update: an unchanged file is not downloaded or moved");
+	check(file_is(gdir, L"ronfix\\RoN-Fix.exe", "new app 4") && file_is(gdir, L"ronfix\\previous\\Accord-Setup.exe", "old app"),
+	      "update: a download called Accord-Setup.exe becomes the app under its old file name, ronfix\\RoN-Fix.exe");
 	check(file_is(gdir, L"ronfix\\version.txt", "4 0.7-test\r\n"), "update: version.txt says release 4");
 
 	r = update_check();
@@ -416,6 +425,188 @@ static void test_upload(void)
 	ulog = INVALID_HANDLE_VALUE;
 }
 
+/* ------------------------------------------------------------------ 0.12's better graphics (ReShade): removal
+ * In a folder of its own (gfx\) inside the scratch game folder. A copy of a system DLL plays ReShade 6.8.0's
+ * dxgi.dll (test_reshade_sha = its hash); loading it holds the file the way the game holds the real one. */
+static WCHAR gfx_dir[MAX_PATH], gfx_log[MAX_PATH];
+
+static void gfx_path(WCHAR *p, const WCHAR *name) { wjoin(p, MAX_PATH, gfx_dir, name, 0); }
+
+static int gfx_has(const WCHAR *name)
+{
+	WCHAR p[MAX_PATH];
+	gfx_path(p, name);
+	return there(p);
+}
+
+/* how many of the files 0.12 listed as its own are there */
+static int gfx_count(void)
+{
+	int n = 0;
+	for (int k = 0; k < GFX_N; k++)
+		n += gfx_has(gfx_files[k]);
+	return n;
+}
+
+/* what 0.12 put into the game folder, except dxgi.dll */
+static void gfx_put(int marker)
+{
+	WCHAR p[MAX_PATH];
+	gfx_path(p, L"ronfix");
+	CreateDirectoryW(p, NULL);
+	for (int k = 0; k < GFX_NDIRS; k++) {
+		gfx_path(p, gfx_dirs[k]);
+		CreateDirectoryW(p, NULL);
+	}
+	for (int k = 0; k < GFX_N; k++) {
+		gfx_path(p, gfx_files[k]);
+		write_file(p, "from 0.12", 9);
+	}
+	gfx_path(p, GFX_MARKER);
+	if (marker)
+		write_file(p, "RoN-Fix better graphics\r\n", 25);
+	else
+		DeleteFileW(p);
+}
+
+/* did the updater's log gain this text since it was `from` bytes long? */
+static int logged(DWORD from, const char *text)
+{
+	static char b[4096];
+	DWORD got = 0;
+	HANDLE f = CreateFileW(gfx_log, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+	if (f == INVALID_HANDLE_VALUE)
+		return 0;
+	SetFilePointer(f, (LONG)from, NULL, FILE_BEGIN);
+	ReadFile(f, b, sizeof b - 1, &got, NULL);
+	CloseHandle(f);
+	b[got] = 0;
+	return contains(b, text);
+}
+
+static void test_graphics(void)
+{
+	static WCHAR sysdll[MAX_PATH], dll[MAX_PATH], aside[MAX_PATH], p[MAX_PATH], gdir_was[MAX_PATH];
+	static char fake_sha[65];
+	unsigned char d[32];
+	DWORD mark;
+	int r;
+
+	sha_buf("abc", 3, d);
+	check(sha_is(d, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") &&
+	          sha_is(d, "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD") &&
+	          !sha_is(d, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ae") && !sha_is(d, "ba7816bf") &&
+	          !sha_is(d, RESHADE32_SHA) && lstrlenA(RESHADE32_SHA) == 64,
+	      "graphics: a file's SHA-256 must match the whole hex value; ReShade 6.8.0's is 64 characters");
+	if (!game[0]) {
+		check(0, "graphics: RONFIX_TEST_GAME not set (run via tools/run-thunk-tests.ps1)");
+		return;
+	}
+	copy(gdir_was, gdir, sizeof gdir);
+	wjoin(gfx_dir, MAX_PATH, game, L"\\gfx\\", 0);
+	CreateDirectoryW(gfx_dir, NULL);
+	copy(gdir, gfx_dir, sizeof gdir);
+	wjoin(gfx_log, MAX_PATH, game, L"\\ronfix-update.log", 0);
+	ulog = CreateFileW(gfx_log, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	gfx_path(dll, GFX_DLL);
+	gfx_path(aside, GFX_ASIDE);
+	GetSystemDirectoryW(sysdll, MAX_PATH); /* SysWOW64 in a 32-bit process */
+	wjoin(sysdll, MAX_PATH, sysdll, L"\\version.dll", 0);
+
+	/* 1. no marker: RoN-Fix did not install graphics here, whatever the files look like */
+	gfx_put(0);
+	CopyFileW(sysdll, dll, FALSE);
+	if (!sha_file(dll, d)) {
+		check(0, "graphics: could not make the stand-in dxgi.dll");
+		goto done;
+	}
+	hex(d, 32, fake_sha);
+	test_reshade_sha = fake_sha;
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(r == 0 && there(dll) && gfx_count() == GFX_N && GetFileSize(ulog, NULL) == mark,
+	      "graphics: without ronfix\\graphics.txt nothing is touched or logged, even with ReShade's own dxgi.dll there");
+
+	/* 2. the marker, but a dxgi.dll that is not ReShade 6.8.0's */
+	gfx_put(1);
+	write_file(dll, "somebody else's add-on", 22);
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(r == 3 && file_is(gfx_dir, GFX_DLL, "somebody else's add-on") && gfx_count() == GFX_N && gfx_has(GFX_MARKER) &&
+	          logged(mark, "left alone"),
+	      "graphics: a dxgi.dll that is not ReShade 6.8.0's stays, and so do the ReShade files and the marker");
+
+	/* 3. 0.12's ReShade, not loaded: everything in one go, the player's own shader kept */
+	CopyFileW(sysdll, dll, FALSE);
+	gfx_path(p, L"reshade-shaders\\Shaders\\Mine.fx");
+	write_file(p, "the player's own shader", 23);
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(r == 1 && !there(dll) && !there(aside) && gfx_count() == 0 && !gfx_has(GFX_MARKER) && logged(mark, "is removed"),
+	      "graphics: 0.12's ReShade is removed (dxgi.dll, shaders, presets, ini, log, marker) when the game has not loaded it");
+	check(file_is(gfx_dir, L"reshade-shaders\\Shaders\\Mine.fx", "the player's own shader") && !gfx_has(L"reshade-shaders\\Shaders\\SweetFX"),
+	      "graphics: the player's own shader and its folders are kept, the empty folder is gone");
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(r == 0 && GetFileSize(ulog, NULL) == mark, "graphics: once removed, later starts do nothing");
+	DeleteFileW(p);
+	gfx_path(p, gfx_dirs[1]);
+	RemoveDirectoryW(p);
+	gfx_path(p, gfx_dirs[0]);
+	RemoveDirectoryW(p);
+
+	/* 4. the game has ReShade loaded, as at every start that gets this far */
+	gfx_put(1);
+	CopyFileW(sysdll, dll, FALSE);
+	HMODULE held = LoadLibraryW(dll);
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	int same = sha_file(aside, d) && sha_is(d, fake_sha);
+	check(held != 0 && r == 2 && !there(dll) && same && logged(mark, "moved to ronfix\\previous"),
+	      "graphics: a dxgi.dll the game has loaded is moved to ronfix\\previous, so ReShade is off from the next start");
+	check(gfx_count() == GFX_N && gfx_has(GFX_MARKER), "graphics: while ReShade is still loaded, its other files and the marker are not touched");
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(r == 2 && there(aside) && gfx_count() == GFX_N && gfx_has(GFX_MARKER) && logged(mark, "cannot be deleted yet"),
+	      "graphics: as long as the moved DLL is in use, the rest waits");
+	if (held)
+		FreeLibrary(held); /* the game was closed */
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(r == 1 && !there(aside) && !there(dll) && gfx_count() == 0 && !gfx_has(GFX_MARKER) && !gfx_has(gfx_dirs[0]) &&
+	          logged(mark, "is removed"),
+	      "graphics: at the next start the moved DLL, the files, the folders and the marker go");
+
+	/* 5. a dxgi.dll that something holds so that it can be neither deleted nor moved (takes 3 s of retries) */
+	gfx_put(1);
+	CopyFileW(sysdll, dll, FALSE);
+	HANDLE hold = CreateFileW(dll, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(hold != INVALID_HANDLE_VALUE && r == 4 && there(dll) && !there(aside) && gfx_count() == GFX_N && gfx_has(GFX_MARKER) &&
+	          logged(mark, "could not be deleted"),
+	      "graphics: a dxgi.dll that can be neither deleted nor moved: nothing is removed, tried again at the next start");
+	CloseHandle(hold);
+
+	/* 6. one of the listed files is in use: it and the marker stay until it can go */
+	gfx_path(p, L"ReShade.log");
+	hold = CreateFileW(p, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	mark = GetFileSize(ulog, NULL);
+	r = graphics_cleanup();
+	check(hold != INVALID_HANDLE_VALUE && r == 2 && !there(dll) && gfx_count() == 1 && gfx_has(L"ReShade.log") && gfx_has(GFX_MARKER) &&
+	          logged(mark, "first: ReShade.log"),
+	      "graphics: a listed file that is in use stays, with the marker; the DLL and the other files are gone");
+	CloseHandle(hold);
+	r = graphics_cleanup();
+	check(r == 1 && gfx_count() == 0 && !gfx_has(GFX_MARKER) && !gfx_has(gfx_dirs[0]), "graphics: that file and the marker go at the next start");
+
+done:
+	test_reshade_sha = 0;
+	CloseHandle(ulog);
+	ulog = INVALID_HANDLE_VALUE;
+	copy(gdir, gdir_was, sizeof gdir);
+}
+
 __declspec(dllexport) int __stdcall run_update_tests(char *buf, int len)
 {
 	out = buf;
@@ -427,6 +618,7 @@ __declspec(dllexport) int __stdcall run_update_tests(char *buf, int len)
 	test_signature();
 	test_update();
 	test_upload();
+	test_graphics();
 	char b[80];
 	wsprintfA(b, "updater: %d passed, %d failed\r\n", passes, fails);
 	say(b);

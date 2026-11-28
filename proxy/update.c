@@ -10,14 +10,20 @@
  * or ronfix.ini [update] Url), checks the ECDSA P-256 signature
  * against the public keys in update_keys.h, downloads the files that changed, checks every SHA-256 and swaps
  * them in for the next start. Files in use are renamed into ronfix\previous\ first; Windows allows that for
- * loaded DLLs. Only RoN-Fix's own files can be targets (target_ok). No CRT. */
+ * loaded DLLs. Only RoN-Fix's own files can be targets (target_ok). No CRT.
+ *
+ * After the update check it also removes the ReShade that RoN-Fix 0.12's "better graphics" option installed
+ * (graphics_cleanup): the setup has done that since 0.13, but players who only ever update never run the setup. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <bcrypt.h>
 #include <winhttp.h>
 #include "update_keys.h"
+#include "graphics012.h"
 
-#define UPDATER_VERSION 2 /* v2 (RoN-Fix 0.15): a release Windows refused is tried again only after a week */
+/* v2 (RoN-Fix 0.15): a release Windows refused is tried again only after a week
+ * v3: removes 0.12's better graphics (ReShade) for players who only ever update */
+#define UPDATER_VERSION 3
 #define REFUSED_RETRY_DAYS 7
 #define FEED_DEFAULT L"https://github.com/soul-builds/RoN-Fix/releases/latest/download/"
 #define AGENT L"RoN-Fix-updater/1"
@@ -689,6 +695,134 @@ static int update_check(void)
 	return 0;
 }
 
+/* ------------------------------------------------------------------ 0.12's better graphics (ReShade): removal
+ * RoN-Fix 0.12's setup could install ReShade 6.8.0 as dxgi.dll. With the Steam overlay on, ReShade can stop the
+ * game at start-up, so 0.13 took the option out and its setup removes the files (setup/graphics.c). A player who
+ * only ever updates never runs that setup, so the updater removes them too, once per game start. The files and the
+ * rules are in graphics012.h: only with the marker file 0.12 wrote, dxgi.dll only when it is byte for byte ReShade
+ * 6.8.0's file, the shader folders only when empty.
+ *
+ * The updater runs inside the game, and the game has that dxgi.dll loaded: Windows refuses to delete a loaded DLL
+ * but lets it be renamed. So for most players it takes two game starts:
+ *   1. dxgi.dll is moved to ronfix\previous (GFX_ASIDE), which switches ReShade off from the next start. Nothing
+ *      else is touched: ReShade is still at work in this process (it reads its shaders again when the display is
+ *      set up anew, keeps ReShade.log open and writes ReShade.ini back when the game closes).
+ *   2. ReShade is no longer loaded: the moved DLL, the listed files, the empty folders and the marker go.
+ * When dxgi.dll is not loaded, deleting it works and everything goes in one start.
+ *
+ * One difference from the setup, where the player pressed Install: if a dxgi.dll is there that is NOT ours, the
+ * player may run their own ReShade on the ini and shaders 0.12 left, so here nothing at all is removed (the setup
+ * removes the listed files in that case, and only leaves the dxgi.dll alone). The marker stays, so the check comes
+ * again at every start, and the setup can still remove the files.
+ *
+ * Returns 0 nothing of 0.12's graphics here (no marker), 1 all removed, 2 not finished (dxgi.dll moved aside, or a
+ * file still in use): goes on at the next start, 3 another dxgi.dll: left alone, 4 dxgi.dll could not be read or
+ * moved: tried again at the next start. */
+#ifdef RONFIX_TEST
+static const char *test_reshade_sha; /* SHA-256 (hex) of the file the tests use in ReShade's place */
+#endif
+
+static int sha_is(const unsigned char d[32], const char *hex)
+{
+	for (int k = 0; k < 32; k++)
+		if (hexval(hex[2 * k]) != d[k] >> 4 || hexval(hex[2 * k + 1]) != (d[k] & 15))
+			return 0; /* also at the end of a hex string that is too short */
+	return 1;
+}
+
+static int there(const WCHAR *p) { return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES; }
+
+static int graphics_cleanup(void)
+{
+	static WCHAR marker[MAX_PATH], dll[MAX_PATH], aside[MAX_PATH], p[MAX_PATH];
+	static char nb[200];
+	const char *want = RESHADE32_SHA;
+	unsigned char sha[32];
+	int moved = 0, gone = 0;
+#ifdef RONFIX_TEST
+	if (test_reshade_sha)
+		want = test_reshade_sha;
+#endif
+	if (!wjoin(marker, MAX_PATH, gdir, GFX_MARKER, 0) || !there(marker))
+		return 0;
+	if (!wjoin(dll, MAX_PATH, gdir, GFX_DLL, 0) || !wjoin(aside, MAX_PATH, gdir, GFX_ASIDE, 0))
+		return 0;
+	int have = there(dll);
+	if (have && !sha_file(dll, sha)) {
+		ulogf("better graphics from RoN-Fix 0.12: dxgi.dll could not be read (error %lu), nothing removed; trying again at "
+		      "the next start", GetLastError());
+		return 4;
+	}
+	int ours = have && sha_is(sha, want);
+	/* 1. dxgi.dll first: it is the file that switches ReShade on */
+	if (ours) {
+		if (DeleteFileW(dll))
+			gone++;
+		else {
+			DWORD e = GetLastError();
+			if (wjoin(p, MAX_PATH, gdir, GFX_ASIDE_DIR, 0))
+				CreateDirectoryW(p, NULL);
+			if (!move_retry(dll, aside)) {
+				ulogf("better graphics from RoN-Fix 0.12: ReShade's dxgi.dll could not be deleted (error %lu) or moved out of "
+				      "the game folder (error %lu), nothing removed; trying again at the next start", e, GetLastError());
+				return 4;
+			}
+			moved = 1;
+		}
+	}
+	/* 2. a dxgi.dll moved aside (now or at an earlier start) can go once no game has it loaded any more */
+	if (there(aside)) {
+		if (DeleteFileW(aside))
+			gone++;
+		else if (moved) {
+			ulogf("better graphics (ReShade) from RoN-Fix 0.12 is being removed: with Steam's overlay on it can stop the game "
+			      "at start-up. The game has its dxgi.dll loaded, so that was moved to ronfix\\previous: no ReShade from the "
+			      "next start, when the rest of its files go too");
+			return 2;
+		} else {
+			ulogf("better graphics from RoN-Fix 0.12: ReShade's dxgi.dll in ronfix\\previous cannot be deleted yet (error "
+			      "%lu); the rest of its files go at a later start", GetLastError());
+			return 2;
+		}
+	}
+	if (have && !ours) {
+		ulogf("better graphics from RoN-Fix 0.12: the dxgi.dll in the game folder is not the ReShade 6.8.0 that RoN-Fix "
+		      "installed, so it and the ReShade files are left alone");
+		return 3;
+	}
+	/* 3. ReShade is not loaded: the files 0.12 listed as its own, then the folders if nothing of the player's is in them */
+	int left = 0;
+	DWORD err = 0;
+	const WCHAR *first = L"";
+	for (int k = 0; k < GFX_N; k++) {
+		if (!wjoin(p, MAX_PATH, gdir, gfx_files[k], 0) || !there(p))
+			continue;
+		if (DeleteFileW(p))
+			gone++;
+		else {
+			if (!left)
+				err = GetLastError(), first = gfx_files[k];
+			left++;
+		}
+	}
+	for (int k = GFX_NDIRS - 1; k >= 0; k--)
+		if (wjoin(p, MAX_PATH, gdir, gfx_dirs[k], 0))
+			RemoveDirectoryW(p);
+	if (left) {
+		ulogf("better graphics from RoN-Fix 0.12: ReShade is switched off and %d of its files are deleted, but %d could not "
+		      "be (first: %s, error %lu); trying again at the next start", gone, left, narrow(first, nb, sizeof nb), err);
+		return 2;
+	}
+	if (!DeleteFileW(marker)) {
+		ulogf("better graphics from RoN-Fix 0.12: its files are deleted (%d), but not ronfix\\graphics.txt (error %lu); "
+		      "trying again at the next start", gone, GetLastError());
+		return 2;
+	}
+	ulogf("better graphics (ReShade) from RoN-Fix 0.12 is removed: with Steam's overlay on it could stop the game at "
+	      "start-up. %d file(s) deleted; anything of your own in reshade-shaders is kept", gone);
+	return 1;
+}
+
 /* ------------------------------------------------------------------ log upload (only with the player's yes)
  * ronfix.ini [upload] Consent=1 is set by the setup after it showed what is sent (PRIVACY.md). Once per game
  * start this sends what RoN-Fix's own logs (ronfix-net/-update/-sound.log) gained since the last upload, at
@@ -907,6 +1041,7 @@ __declspec(dllexport) int __cdecl ronfix_update(const WCHAR *gamedir, HANDLE log
 	ulog = log;
 	ulogf("updater v%d: checking for a new RoN-Fix", UPDATER_VERSION);
 	int r = update_check();
+	graphics_cleanup(); /* after the check: a new release is fetched whatever happens here; before the upload: its lines go along */
 	upload_logs();
 	return r;
 }

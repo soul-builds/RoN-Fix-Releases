@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Tests RoN-Fix-Setup.exe (command-line mode) on a scratch copy of the game made from the Steam install's
+  Tests Accord-Setup.exe (command-line mode) on a scratch copy of the game made from the Steam install's
   ORIGINAL files: install, install again, Steam restoring a file, a player's own settings, the 4 GB flag,
   restore byte for byte, and refusing a different game build. Exit code = failures.
   With -Dll the same install/restore code runs from setup\tests\setup_test.dll inside a 32-bit PowerShell
   (used when Windows' Smart App Control will not run the unsigned exe on this PC).
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File tools\test-setup.ps1 -Setup dist\release-7\RoN-Fix-Setup.exe
-  powershell -ExecutionPolicy Bypass -File tools\test-setup.ps1 -Setup dist\release-7\RoN-Fix-Setup.exe -Dll setup\tests\setup_test.dll
+  powershell -ExecutionPolicy Bypass -File tools\test-setup.ps1 -Setup dist\release-7\Accord-Setup.exe
+  powershell -ExecutionPolicy Bypass -File tools\test-setup.ps1 -Setup dist\release-7\Accord-Setup.exe -Dll setup\tests\setup_test.dll
 #>
 param([Parameter(Mandatory)][string]$Setup, [string]$Dll)
 $ErrorActionPreference = 'Stop'
@@ -21,6 +21,7 @@ if ($Dll) {
 	Add-Type -Namespace S -Name T -MemberDefinition ('[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_run(int action, string dir, string self, System.Text.StringBuilder o, int cap);' +
 		'[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_bans_list(string dir, System.Text.StringBuilder o, int cap);' +
 		'[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern int setup_test_bans_unban(string dir, int row);' +
+		'[DllImport(@"' + $Dll + '", CharSet = CharSet.Unicode)] public static extern void setup_test_shortcut(string progs, string target, int appStart);' +
 		'[DllImport(@"' + $Dll + '")] public static extern void setup_test_refuse_loader(int on);')
 }
 $steam = 'C:\Program Files (x86)\Steam\steamapps\common\Rise of Nations'
@@ -131,8 +132,11 @@ try {
 		}
 		Put012
 		Set-Content "$g\reshade-shaders\Shaders\Mine.fx" 'the player''s own shader'
+		# the updater moves a dxgi.dll the game has loaded to this place (proxy/graphics012.h): the setup clears it too
+		New-Item -ItemType Directory -Force "$g\ronfix\previous" | Out-Null
+		Set-Content "$g\ronfix\previous\dxgi-reshade.dll" 'moved here by the updater'
 		$code = Run @('--install', "`"$g`"", '--no-shortcut', '--graphics', 'strong')
-		$left = @($gfx + 'dxgi.dll' | Where-Object { Test-Path "$g\$_" })
+		$left = @($gfx + 'dxgi.dll', 'ronfix\previous\dxgi-reshade.dll' | Where-Object { Test-Path "$g\$_" })
 		Check ($code -eq 0 -and $left.Count -eq 0 -and $lastmsg -match 'Better graphics \(ReShade\) from RoN-Fix 0.12 was removed') "graphics: 0.12's ReShade removed by the install, --graphics ignored (left: $($left -join ', '))"
 		Check ((Get-Content "$g\reshade-shaders\Shaders\Mine.fx") -eq 'the player''s own shader' -and -not (Test-Path "$g\reshade-shaders\Shaders\SweetFX")) "graphics: the player's own shader (and its folders) kept, empty folders gone"
 		Remove-Item -Recurse -Force "$g\reshade-shaders"
@@ -147,6 +151,28 @@ try {
 	} else { "SKIP graphics removal tests: $reshade not found" }
 
 	if ($Dll) {
+		# the Start menu entry, in a scratch folder: it is called Accord, and an entry under the old name (RoN-Fix, up
+		# to 0.15) is renamed, never left as a second one. The installed app keeps its file name.
+		$sm = Join-Path $g 'startmenu'; New-Item -ItemType Directory $sm | Out-Null
+		$app = "$g\ronfix\RoN-Fix.exe"
+		function Links { @(Get-ChildItem $sm -Filter *.lnk | Sort-Object Name | ForEach-Object { $_.Name }) -join ',' }
+		function LinkTo($l) { (New-Object -ComObject WScript.Shell).CreateShortcut($l).TargetPath }
+		[S.T]::setup_test_shortcut($sm, $app, 0)
+		Check ((Links) -eq 'Accord.lnk' -and (LinkTo "$sm\Accord.lnk") -eq $app) "Start menu: an install writes one entry, Accord, to ronfix\RoN-Fix.exe ($(Links))"
+		# as 0.15 left it: an entry called RoN-Fix; an update has replaced the app since
+		Rename-Item "$sm\Accord.lnk" 'RoN-Fix.lnk'
+		[S.T]::setup_test_shortcut($sm, "$g\Accord-Setup.exe", 1)
+		Check ((Links) -eq 'RoN-Fix.lnk') "Start menu: a downloaded setup that is only opened leaves the old entry alone ($(Links))"
+		[S.T]::setup_test_shortcut($sm, $app, 1)
+		Check ((Links) -eq 'Accord.lnk' -and (LinkTo "$sm\Accord.lnk") -eq $app) "Start menu: the installed app, started after an update, renames the RoN-Fix entry to Accord ($(Links))"
+		Copy-Item "$sm\Accord.lnk" "$sm\RoN-Fix.lnk"
+		[S.T]::setup_test_shortcut($sm, $app, 0)
+		Check ((Links) -eq 'Accord.lnk') "Start menu: an install with both entries there leaves one, Accord ($(Links))"
+		Remove-Item "$sm\Accord.lnk"
+		[S.T]::setup_test_shortcut($sm, $app, 1)
+		Check ((Links) -eq '') "Start menu: no entry (the player removed it) = the app makes none when it starts ($(Links))"
+		Remove-Item -Recurse -Force $sm
+
 		# the "Banned players" window: list and unban (setup/bans.c), on the file format the core writes and reads
 		$bf = "$g/ronfix-bans.txt"
 		function Bans { $sb = New-Object System.Text.StringBuilder 8192; $n = [S.T]::setup_test_bans_list($g, $sb, 8192); $script:banlist = $sb.ToString(); $n }

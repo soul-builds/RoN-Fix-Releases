@@ -26,6 +26,12 @@
  *        PC sends also travels, numbered, over Steam to players who have the mirror on, and is compared on arrival
  *        with what PlayFab delivered. The game still uses PlayFab's only. [steam] Mirror=1, off by default.
  *        Slot 21 (send to one player) is hooked for it, pass-through.
+ *   v18: lobby tags (lobbytag.c): every RoN-Fix player posts its release as a PlayFab member key, and the log (and,
+ *        once a way to draw it is proven, the lobby) says who has RoN-Fix and who plays without. [lobby] Tags=1.
+ *   v19: gameplay switch (gameswitch.c): the gameplay pack loaded per match, at session set-up, when every player
+ *        has it ready; the original game otherwise. [gamefix] Switch=1, off by default.
+ *   v20: lobby lines (lobbyline.c): the lobby tags are drawn in the lobby's chat list on this PC, with the game's
+ *        own method for local notices. [lobby] TagLines=1.
  *
  * How RoN drops a player (reverse/netcode-map.md, "How a player actually gets dropped"): every
  * client must report having lost them; when all have, the game drops them at the same turn on all
@@ -104,6 +110,9 @@ static int lf_enabled;  /* [lobby] Fixes: host-only lobby fixes (lobbyfix.c, v12
 static int td_capable, td_host_wants; /* shorter command delay (turndelay.c, v13) */
 static unsigned td_min, td_max;
 static void td_init(unsigned char *exe);
+static int gs_switch, gs_solo, gs_ready; /* gameplay pack per match (gameswitch.c, v19) */
+static void gs_init(unsigned char *exe, const char *gamedir);
+static void gs_log_start(void);
 static void bar_ours(DWORD now);
 
 /* ------------------------------------------------------------------ logging */
@@ -602,7 +611,7 @@ static int THISCALL w_check_pulse(void *self)
 {
 	snd_tick();
 	telemetry_tick(self);
-	if (lobby_log || lf_enabled || td_capable) /* the lobby fixes and the delay negotiation reuse these scans */
+	if (lobby_log || lf_enabled || td_capable || gs_ready) /* the lobby fixes and the negotiations reuse these scans */
 		lobby_tick(self);
 	if (exe_ok) {
 		steam_tick(self);
@@ -936,6 +945,17 @@ static void gr_tick(void *self, DWORD now, void *setup, unsigned flags);
 static void td_rewrite(void *lobby, const void **mu);
 static void td_on_lobby_gone(void *lobby);
 static void td_tick(int setup_open, int setup_closed_now, int setup_opened_now);
+/* lobby tags (lobbytag.c, included at the end): who in the lobby has RoN-Fix */
+static int lt_enabled;
+static void lt_set_release(unsigned release, const char *name);
+static void lt_rewrite(const void *user, const void **mu);
+static void lt_tick(int setup_open, int setup_opened_now, DWORD now);
+/* gameplay switch (gameswitch.c, included at the end): the gameplay pack per match, agreed through the same key */
+static void gs_tick(int setup_open, int setup_closed_now, int setup_opened_now, DWORD now);
+/* lobby lines (lobbyline.c): the lobby tags in the lobby's own chat list, on this PC only */
+static int ls_enabled;
+static DWORD ls_thread;
+static void ls_init(unsigned char *exe);
 #ifdef RONFIX_TEST
 static int lf_test_shift; /* tests: "Shift held" at boot time */
 #define LF_SHIFT_HELD() lf_test_shift
@@ -1361,6 +1381,7 @@ static void pf_log_post(void *lobby, const void *user, const void *lu, const voi
 static long __stdcall w_pf_post(void *lobby, const void *user, const void *lu, const void *mu, void *ctx)
 {
 	td_rewrite(lobby, &mu); /* shorter command delay: our member key rides along (turndelay.c) */
+	lt_rewrite(user, &mu);  /* lobby tags: so does our release (lobbytag.c) */
 	long hr = pf_post_orig(lobby, user, lu, mu, ctx);
 	pf_log_post(lobby, user, lu, mu, hr, GetTickCount());
 	return hr;
@@ -1516,6 +1537,7 @@ static void lobby_tick(void *self)
 	if (!started) {
 		started = 1;
 		logline("LOBBY logging on: check_pulse runs on this thread; netsys flags %x, setup window %p", flags, setup);
+		ls_thread = GetCurrentThreadId(); /* the game's main thread: the only one lobby lines are drawn from */
 		last_setup = setup;
 	}
 	peer_scan(self, now);
@@ -1536,6 +1558,8 @@ static void lobby_tick(void *self)
 	gr_tick(self, now, setup, flags);
 	lf_tick(self, now);
 	td_tick(setup != 0, closed_now, opened_now);
+	lt_tick(setup != 0, opened_now, now);
+	gs_tick(setup != 0, closed_now, opened_now, now);
 }
 
 /* ------------------------------------------------------------------ the one real export */
@@ -1566,9 +1590,13 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 		lf_bootkick = (int)GetPrivateProfileIntA("lobby", "BootKick", 1, ini);
 		lf_spamkick = (int)GetPrivateProfileIntA("lobby", "SpamKick", 12, ini);
 		gr_enabled = (int)GetPrivateProfileIntA("lobby", "GhostRoom", 1, ini);
+		lt_enabled = (int)GetPrivateProfileIntA("lobby", "Tags", 1, ini);
+		ls_enabled = (int)GetPrivateProfileIntA("lobby", "TagLines", 1, ini);
 		td_host_wants = (int)GetPrivateProfileIntA("netfix", "ShortDelay", 0, ini);
 		td_min = (unsigned)GetPrivateProfileIntA("netfix", "TurnFloorMin", 200, ini);
 		td_max = (unsigned)GetPrivateProfileIntA("netfix", "TurnFloorMax", 300, ini);
+		gs_switch = (int)GetPrivateProfileIntA("gamefix", "Switch", 0, ini);
+		gs_solo = (int)GetPrivateProfileIntA("gamefix", "Solo", 0, ini);
 		lstrcpyA(lf_ban_path, dir);
 		lstrcatA(lf_ban_path, "ronfix-bans.txt");
 		sl_enabled = (int)GetPrivateProfileIntA("steam", "Shadow", 1, ini);
@@ -1584,10 +1612,19 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 				ReadFile(vf, vb, sizeof vb - 1, &got, NULL);
 				CloseHandle(vf);
 			}
-			for (DWORD k = 0; k < got && vb[k] >= '0' && vb[k] <= '9'; k++)
+			DWORD k = 0;
+			for (; k < got && vb[k] >= '0' && vb[k] <= '9'; k++)
 				sl_release_no = sl_release_no * 10 + (unsigned)(vb[k] - '0');
+			/* the second word is the name players know the release by ("16 0.16"): for the lobby tags */
+			vb[got < sizeof vb ? got : sizeof vb - 1] = 0;
+			while (k < got && vb[k] == ' ')
+				k++;
+			for (DWORD e = k; e < got; e++)
+				if ((unsigned char)vb[e] <= ' ')
+					vb[e] = 0;
+			lt_set_release(sl_release_no, k < got ? vb + k : "");
 		}
-		logline("==== RoN-Fix core v17, pid %lu; exe build %s; fix A %s (report after %d s without turn data); fix B (desync-vote crash) %s",
+		logline("==== RoN-Fix core v20, pid %lu; exe build %s; fix A %s (report after %d s without turn data); fix B (desync-vote crash) %s",
 		        GetCurrentProcessId(), exe_ok ? "ok" : "UNKNOWN", exe_ok && report_ms > 0 ? "ON" : "OFF",
 		        report_ms / 1000, exe_ok ? "ON" : "OFF");
 		sac_log();
@@ -1606,11 +1643,11 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 			/* Once per start, main thread, outside the loader lock (this export runs at start-up). Without it the
 			 * player only finds out when the group's lobby refuses them with "version does not match". */
 			MessageBoxA(NULL,
-			            "The RoN-Fix gameplay pack is switched OFF: the game's data files are no longer the ones RoN-Fix "
+			            "The Accord gameplay pack is switched OFF: the game's data files are no longer the ones the pack "
 			            "installed (Steam probably restored the originals after an update or \"Verify integrity\").\n\n"
 			            "You can still play with people who do NOT have the gameplay pack.\n"
-			            "To play with your RoN-Fix group again, close the game and run INSTALL.bat from the RoN-Fix folder.",
-			            "RoN-Fix", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+			            "To play with your group again, close the game and run INSTALL.bat from the gameplay pack's folder.",
+			            "Accord", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
 		}
 		if (gamefix_version > 0)
 			logline("gameplay code fixes (pack %d): CBP %s", gamefix_version, cbpfix_report);
@@ -1622,7 +1659,12 @@ __declspec(dllexport) void *__cdecl get_netsys_object_ptr(void *arg)
 			td_init(exe_base);
 		logline("short command delay: %s; %s, turn floor %u-%u ms", td_capable ? "this PC can take part" : "NOT possible (unexpected code at turn start)",
 		        td_host_wants ? "on when hosting ([netfix] ShortDelay=1)" : "off when hosting ([netfix] ShortDelay=0)", td_min, td_max);
-		if ((lobby_log || lf_enabled || td_capable) && exe_ok)
+		if (exe_ok && lt_enabled)
+			ls_init(exe_base); /* the lobby tags on screen, if the game's chat line code is as expected */
+		if (exe_ok)
+			gs_init(exe_base, dir); /* after lt_set_release: it adds its part to our lobby tag */
+		gs_log_start();
+		if ((lobby_log || lf_enabled || td_capable || gs_ready) && exe_ok)
 			pf_hooks_install();
 		else
 			logline("lobby logging and fixes off (%s)", exe_ok ? "ronfix.ini [lobby] Log=0, Fixes=0" : "unknown exe build");
@@ -2021,3 +2063,6 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 }
 
 #include "turndelay.c" /* shorter command delay: all players agree through PlayFab member data */
+#include "lobbytag.c"  /* who in the lobby has RoN-Fix, from the same member data */
+#include "lobbyline.c" /* ... and those lines in the lobby's chat list, on this PC only */
+#include "gameswitch.c" /* the gameplay pack per match: loaded at session set-up when every player has it */
